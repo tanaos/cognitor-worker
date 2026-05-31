@@ -1,0 +1,15 @@
+[project]
+name = "cognitor-docx-connector"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cognitor",
+    "olefile>=0.47",
+    "python-docx>=1.2.0",
+    "tiktoken>=0.13.0",
+]
+
+[tool.uv.sources]
+cognitor = { path = "cognitor-0.1.0-py3-none-any.whl" }
