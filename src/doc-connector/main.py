@@ -13,7 +13,8 @@ import math
 import struct
 from pathlib import Path
 from typing import Any
-
+from dotenv import load_dotenv
+import os
 import olefile
 from tiktoken import get_encoding
 from docx import Document as DocxDocument
@@ -21,7 +22,11 @@ from docx.oxml.ns import qn
 from cognitor import Cognitor
 
 
+load_dotenv()
+
+
 COGNITOR_URL = "http://localhost:7530"
+COGNITOR_API_KEY = os.getenv("COGNITOR_API_KEY", None)
 COLLECTION_NAME = "docx"
 DOCS_FOLDER = Path("docs")
 
@@ -385,7 +390,7 @@ def main() -> None:
         f"chunk_size={CHUNK_SIZE} tokens  |  overlap={OVERLAP_SIZE} tokens ({OVERLAP_RATIO:.0%})"
     )
 
-    with Cognitor(COGNITOR_URL) as client:
+    with Cognitor(COGNITOR_URL, api_key=COGNITOR_API_KEY) as client:
         try:
             client.get_collection(COLLECTION_NAME)
             client.delete_collection(COLLECTION_NAME)
