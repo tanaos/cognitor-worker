@@ -105,14 +105,14 @@ dependencies = [
     { name = "httpx" },
 ]
 wheels = [
-    { filename = "cognitor-0.1.0-py3-none-any.whl", hash = "sha256:73c35e0de394ecfc2e8ec0beed136fda8be192c77808ea1b2641df12bb8fc77f" },
+    { filename = "cognitor-0.1.0-py3-none-any.whl", hash = "sha256:25e69e4eb2bcdc1c3b848cbd1d43dc7f234d5e973d4f831e71fb726d9fbf0c55" },
 ]
 
 [package.metadata]
 requires-dist = [{ name = "httpx", specifier = ">=0.27.0" }]
 
 [[package]]
-name = "cognitor-docx-connector"
+name = "cognitor-worker"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

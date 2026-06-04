@@ -1,5 +1,5 @@
 [project]
-name = "cognitor-docx-connector"
+name = "cognitor-worker"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"

@@ -1,9 +1,3 @@
-"""
-Utilities for parsing .doc/.docx files and producing chunk payloads.
-
-This module intentionally contains no daemon/worker orchestration logic.
-"""
-
 import math
 import struct
 from pathlib import Path
@@ -22,6 +16,15 @@ ENCODING_NAME = "cl100k_base"
 
 
 def starts_new_page(para: Any) -> bool:
+    """
+    Determine if a paragraph starts a new page based on its properties.
+    
+    Args:
+        para: A paragraph object from python-docx.
+    Returns:
+        True if the paragraph has a page break before it, False otherwise.
+    """
+    
     pPr = para._element.find(qn("w:pPr"))
     if pPr is not None:
         pb = pPr.find(qn("w:pageBreakBefore"))
@@ -32,6 +35,15 @@ def starts_new_page(para: Any) -> bool:
 
 
 def run_has_page_break(run: Any) -> bool:
+    """
+    Determine if a run contains a page break.
+    
+    Args:
+        run: A run object from python-docx.
+    Returns:
+        True if the run contains a page break, False otherwise.
+    """
+    
     for br in run._element.findall(qn("w:br")):
         if br.get(qn("w:type")) == "page":
             return True
@@ -39,6 +51,16 @@ def run_has_page_break(run: Any) -> bool:
 
 
 def extract_paragraphs_from_docx(path: Path) -> list[dict[str, Any]]:
+    """
+    Extract paragraphs from a .docx file, along with their paragraph and page numbers.
+    
+    Args:
+        path: Path to the .docx file.
+    Returns:
+        A list of dictionaries, each containing the text, paragraph number, and page number of a 
+        paragraph.
+    """
+    
     doc: Any = DocxDocument(str(path))
     records: list[dict[str, Any]] = []
     page = 1
@@ -62,6 +84,15 @@ def extract_paragraphs_from_docx(path: Path) -> list[dict[str, Any]]:
 
 
 def read_binary_doc_text(path: Path) -> str:
+    """
+    Read text from a binary .doc file by parsing its OLE structure.
+    
+    Args:
+        path: Path to the .doc file.
+    Returns:
+        The extracted text from the .doc file.
+    """
+    
     with olefile.OleFileIO(str(path)) as ole:
         if not ole.exists("WordDocument"):
             raise ValueError("Not a Word document: 'WordDocument' stream missing")
@@ -132,6 +163,16 @@ def read_binary_doc_text(path: Path) -> str:
 
 
 def extract_paragraphs_from_binary_doc(path: Path) -> list[dict[str, Any]]:
+    """
+    Extract paragraphs from a binary .doc file, along with their paragraph and page numbers.
+    
+    Args:
+        path: Path to the .doc file.
+    Returns:
+        A list of dictionaries, each containing the text, paragraph number, and page number of a 
+        paragraph.
+    """
+    
     raw = read_binary_doc_text(path)
 
     records: list[dict[str, Any]] = []
@@ -173,12 +214,36 @@ def extract_paragraphs_from_binary_doc(path: Path) -> list[dict[str, Any]]:
 
 
 def extract_paragraphs(path: Path) -> list[dict[str, Any]]:
+    """
+    Extract paragraphs from a document file, dispatching to the appropriate method based 
+    on file type.
+    
+    Args:
+        path: Path to the document file (.docx or .doc).
+    Returns:
+        A list of dictionaries, each containing the text, paragraph number, and page number of a 
+        paragraph.
+    """
+    
     if path.suffix.lower() == ".docx":
         return extract_paragraphs_from_docx(path)
     return extract_paragraphs_from_binary_doc(path)
 
 
-def build_token_stream(paragraphs: list[dict[str, Any]], enc: Any) -> list[tuple[int, int, int]]:
+def build_token_stream(
+    paragraphs: list[dict[str, Any]], enc: Any
+) -> list[tuple[int, int, int]]:
+    """
+    Build a token stream from the extracted paragraphs, encoding the text and associating
+    paragraph and page numbers with each token.
+    
+    Args:
+        paragraphs: A list of dictionaries containing paragraph text and metadata.
+        enc: An encoding object from tiktoken to encode the text into tokens.
+    Returns:
+        A list of tuples, each containing a token ID, paragraph number, and page number.
+    """
+    
     stream: list[tuple[int, int, int]] = []
     space_tokens = enc.encode(" ")
 
@@ -197,6 +262,18 @@ def make_chunks(
     overlap_size: int,
     enc: Any,
 ) -> list[dict[str, Any]]:
+    """
+    Create chunks from a token stream, maintaining paragraph and page metadata.
+
+    Args:
+        stream: A list of tuples containing token ID, paragraph number, and page number.
+        chunk_size: The maximum number of tokens in a chunk.
+        overlap_size: The number of tokens to overlap between consecutive chunks.
+        enc: An encoding object from tiktoken to decode the tokens back into text.
+    Returns:
+        A list of dictionaries, each containing the text, paragraph number, and page number of a chunk.
+    """
+    
     step = chunk_size - overlap_size
     chunks: list[dict[str, Any]] = []
     total = len(stream)
@@ -227,6 +304,19 @@ def build_doc_chunks(
     overlap_size: int = OVERLAP_SIZE,
     encoding_name: str = ENCODING_NAME,
 ) -> list[dict[str, Any]]:
+    """
+    Build text chunks from a document file, handling both .docx and .doc formats.
+    
+    Args:
+        path: Path to the document file (.docx or .doc).
+        chunk_size: The maximum number of tokens in a chunk.
+        overlap_size: The number of tokens to overlap between consecutive chunks.
+        encoding_name: The name of the encoding to use from tiktoken.
+    Returns:
+        A list of dictionaries, each containing the text, paragraph number, and page number of 
+        a chunk.
+    """
+    
     paragraphs = extract_paragraphs(path)
     if not paragraphs:
         return []

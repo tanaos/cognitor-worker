@@ -1,9 +1,3 @@
-"""
-Daemon that synchronizes a local folder to a Cognitor collection.
-
-File-type parsing/chunking lives in per-type connectors under src/*-connector.
-"""
-
 import importlib.util
 import os
 import signal
@@ -23,11 +17,15 @@ COGNITOR_URL = os.getenv("COGNITOR_URL")
 COGNITOR_API_KEY = os.getenv("COGNITOR_API_KEY", None)
 COLLECTION_NAME = os.getenv("COGNITOR_COLLECTION_NAME")
 DOCS_FOLDER_RAW = os.getenv("DOCS_FOLDER")
-SYNC_INTERVAL_SECONDS = float(os.getenv("SYNC_INTERVAL_SECONDS", "5"))
+SYNC_INTERVAL_SECONDS = float(os.getenv("SYNC_INTERVAL_SECONDS", "60"))
 
 
 def _load_doc_connector() -> ModuleType:
-    connector_path = Path(__file__).resolve().parents[1] / "doc-connector" / "main.py"
+    """
+    Dynamically load the doc connector module from src/doc-connector/main.py.
+    """
+    
+    connector_path = Path(__file__).parent / "doc-connector" / "main.py"
     spec = importlib.util.spec_from_file_location("doc_connector_main", connector_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load doc connector module at {connector_path}")
@@ -37,11 +35,30 @@ def _load_doc_connector() -> ModuleType:
 
 
 def _build_file_signature(path: Path) -> str:
+    """
+    Build a simple signature for a file based on its size and modification time.
+    
+    Args:
+        path: Path to the file.
+    Returns:
+        A string signature that changes if the file content likely changed.
+    """
+    
     stat = path.stat()
     return f"{stat.st_size}:{stat.st_mtime_ns}"
 
 
 def _iter_all_documents(client: Cognitor, collection: str) -> list[Any]:
+    """
+    Retrieve all documents from the specified collection, handling pagination.
+    
+    Args:
+        client: An instance of the Cognitor client.
+        collection: The name of the collection to retrieve documents from.
+    Returns:        
+        A list of all documents in the collection.
+    """
+    
     docs: list[Any] = []
     offset = 0
     page_size = 200
@@ -57,6 +74,15 @@ def _iter_all_documents(client: Cognitor, collection: str) -> list[Any]:
 
 
 def _group_docs_by_source_path(documents: list[Any]) -> dict[str, list[Any]]:
+    """
+    Group documents by their source path.
+
+    Args:
+        documents: A list of documents to group.
+    Returns:
+        A dictionary mapping source paths to lists of documents.
+    """
+    
     grouped: dict[str, list[Any]] = {}
     for doc in documents:
         metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
@@ -67,6 +93,17 @@ def _group_docs_by_source_path(documents: list[Any]) -> dict[str, list[Any]]:
 
 
 def _delete_documents(client: Cognitor, collection: str, doc_ids: list[str]) -> int:
+    """
+    Delete documents from the specified collection.
+
+    Args:
+        client: An instance of the Cognitor client.
+        collection: The name of the collection to delete documents from.
+        doc_ids: A list of document IDs to delete.
+    Returns:
+        The number of documents successfully deleted.
+    """
+    
     deleted = 0
     for doc_id in doc_ids:
         try:
@@ -78,6 +115,14 @@ def _delete_documents(client: Cognitor, collection: str, doc_ids: list[str]) -> 
 
 
 def _ensure_collection(client: Cognitor, collection: str) -> None:
+    """
+    Ensure that the specified collection exists.
+
+    Args:
+        client: An instance of the Cognitor client.
+        collection: The name of the collection to ensure.
+    """
+    
     try:
         client.get_collection(collection)
     except Exception:
@@ -92,6 +137,17 @@ def _ingest_doc_file(
     file_signature: str,
     doc_connector: ModuleType,
 ) -> None:
+    """
+    Ingest a document file into the specified collection.
+    
+    Args:
+        client: An instance of the Cognitor client.
+        collection: The name of the collection to ingest into.
+        path: The path to the document file.
+        file_signature: The signature of the file.
+        doc_connector: The document connector module.
+    """
+    
     try:
         chunks = doc_connector.build_doc_chunks(path)
     except Exception as exc:
@@ -118,7 +174,20 @@ def _ingest_doc_file(
     print(f"  {path.name}: {len(ids)} chunk(s) ingested")
 
 
-def sync_once(client: Cognitor, collection: str, docs_folder: Path, doc_connector: ModuleType) -> None:
+def sync_once(
+    client: Cognitor, collection: str, docs_folder: Path, 
+    doc_connector: ModuleType
+) -> None:
+    """
+    Perform a single synchronization pass between the local folder and the Cognitor collection.
+    
+    Args:
+        client: An instance of the Cognitor client.
+        collection: The name of the collection to synchronize with.
+        docs_folder: The local folder containing document files.
+        doc_connector: The document connector module to use for parsing files.
+    """
+    
     _ensure_collection(client, collection)
 
     local_files = sorted(
@@ -170,6 +239,11 @@ def sync_once(client: Cognitor, collection: str, docs_folder: Path, doc_connecto
 
 
 def run_daemon() -> None:
+    """
+    Run the Cognitor sync daemon, which continuously synchronizes the local folder
+    with the Cognitor collection at regular intervals.
+    """
+    
     missing: list[str] = []
     if not DOCS_FOLDER_RAW:
         missing.append("DOCS_FOLDER")
@@ -180,6 +254,11 @@ def run_daemon() -> None:
     if missing:
         missing_values = ", ".join(missing)
         raise ValueError(f"Missing required environment variable(s): {missing_values}")
+    
+    # Redundant check for type safety and to satisfy static analysis
+    assert DOCS_FOLDER_RAW is not None and \
+        COLLECTION_NAME is not None and \
+        COGNITOR_URL is not None
 
     docs_folder = Path(DOCS_FOLDER_RAW).expanduser().resolve()
     if not docs_folder.exists():
