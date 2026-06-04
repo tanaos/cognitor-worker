@@ -5,12 +5,14 @@ import threading
 from pathlib import Path
 from types import ModuleType
 from typing import Any
-
 from cognitor import Cognitor
 from dotenv import load_dotenv
 
+from utils.logging import setup_logging
+
 
 load_dotenv()
+setup_logging()
 
 
 COGNITOR_URL = os.getenv("COGNITOR_URL")
