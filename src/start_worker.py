@@ -1,25 +1,26 @@
 import importlib.util
+import logging
 import os
 import signal
 import threading
 from pathlib import Path
 from types import ModuleType
 from typing import Any
-from cognitor import Cognitor
-from dotenv import load_dotenv
+import subprocess
+import sys
 
+from cognitor import Cognitor
+
+from config.settings import Config
 from utils.logging import setup_logging
 
 
-load_dotenv()
 setup_logging()
 
+logger = logging.getLogger(__name__)
 
-COGNITOR_URL = os.getenv("COGNITOR_URL")
-COGNITOR_API_KEY = os.getenv("COGNITOR_API_KEY", None)
-COLLECTION_NAME = os.getenv("COGNITOR_COLLECTION_NAME")
-DOCS_FOLDER_RAW = os.getenv("DOCS_FOLDER")
-SYNC_INTERVAL_SECONDS = float(os.getenv("SYNC_INTERVAL_SECONDS", "60"))
+
+config = Config() # type: ignore[assignment]
 
 
 def _load_doc_connector() -> ModuleType:
@@ -112,7 +113,7 @@ def _delete_documents(client: Cognitor, collection: str, doc_ids: list[str]) -> 
             client.delete_document(collection, doc_id)
             deleted += 1
         except Exception as exc:
-            print(f"  Failed to delete document {doc_id}: {exc}")
+            logger.error("Failed to delete document %s: %s", doc_id, exc)
     return deleted
 
 
@@ -129,7 +130,7 @@ def _ensure_collection(client: Cognitor, collection: str) -> None:
         client.get_collection(collection)
     except Exception:
         client.create_collection(collection)
-        print(f"Created collection '{collection}'")
+        logger.info("Created collection '%s'", collection)
 
 
 def _ingest_doc_file(
@@ -137,48 +138,27 @@ def _ingest_doc_file(
     collection: str,
     path: Path,
     file_signature: str,
-    doc_connector: ModuleType,
+    ingestion_service: Any,
 ) -> None:
     """
     Ingest a document file into the specified collection.
-    
+
     Args:
         client: An instance of the Cognitor client.
         collection: The name of the collection to ingest into.
         path: The path to the document file.
         file_signature: The signature of the file.
-        doc_connector: The document connector module.
+        ingestion_service: The document ingestion service.
     """
-    
-    try:
-        chunks = doc_connector.build_doc_chunks(path)
-    except Exception as exc:
-        print(f"  Skipped {path.name}: {exc}")
-        return
 
-    if not chunks:
-        print(f"  Skipped {path.name}: no text found")
-        return
-
-    texts = [c["text"] for c in chunks]
-    metadatas = [
-        {
-            "source_name": path.name,
-            "source_path": str(path.resolve()),
-            "paragraph_num": c["paragraph_num"],
-            "page_num": c["page_num"],
-            "file_signature": file_signature,
-        }
-        for c in chunks
-    ]
-
-    ids = client.bulk_add_documents(collection, texts, metadatas)
-    print(f"  {path.name}: {len(ids)} chunk(s) ingested")
+    ingestion_service.ingest_file(client, collection, path, file_signature)
 
 
 def sync_once(
-    client: Cognitor, collection: str, docs_folder: Path, 
-    doc_connector: ModuleType
+    client: Cognitor,
+    collection: str,
+    docs_folder: Path,
+    ingestion_service: Any,
 ) -> None:
     """
     Perform a single synchronization pass between the local folder and the Cognitor collection.
@@ -187,7 +167,7 @@ def sync_once(
         client: An instance of the Cognitor client.
         collection: The name of the collection to synchronize with.
         docs_folder: The local folder containing document files.
-        doc_connector: The document connector module to use for parsing files.
+        ingestion_service: The document ingestion service.
     """
     
     _ensure_collection(client, collection)
@@ -208,7 +188,7 @@ def sync_once(
         stale_docs = remote_by_path[source_path]
         deleted = _delete_documents(client, collection, [doc.id for doc in stale_docs])
         if deleted:
-            print(f"Removed {deleted} stale chunk(s) for missing file: {source_path}")
+            logger.info("Removed %s stale chunk(s) for missing file: %s", deleted, source_path)
 
     added_or_updated = 0
     for source_path, path in local_map.items():
@@ -216,8 +196,8 @@ def sync_once(
         existing_docs = remote_by_path.get(source_path, [])
 
         if not existing_docs:
-            print(f"Ingesting new file: {path.name}")
-            _ingest_doc_file(client, collection, path, signature, doc_connector)
+            logger.info("Ingesting new file: %s", path.name)
+            _ingest_doc_file(client, collection, path, signature, ingestion_service)
             added_or_updated += 1
             continue
 
@@ -229,14 +209,20 @@ def sync_once(
 
         if existing_signatures != {signature}:
             deleted = _delete_documents(client, collection, [doc.id for doc in existing_docs])
-            print(f"Reingesting changed file: {path.name} (removed {deleted} old chunk(s))")
-            _ingest_doc_file(client, collection, path, signature, doc_connector)
+            logger.info(
+                "Reingesting changed file: %s (removed %s old chunk(s))",
+                path.name,
+                deleted,
+            )
+            _ingest_doc_file(client, collection, path, signature, ingestion_service)
             added_or_updated += 1
 
-    print(
-        "Sync pass complete | "
-        f"local_files={len(local_files)} remote_docs={len(remote_docs)} "
-        f"removed_paths={len(removed_paths)} added_or_updated_files={added_or_updated}"
+    logger.info(
+        "Sync pass complete | local_files=%s remote_docs=%s removed_paths=%s added_or_updated_files=%s",
+        len(local_files),
+        len(remote_docs),
+        len(removed_paths),
+        added_or_updated,
     )
 
 
@@ -247,55 +233,98 @@ def run_daemon() -> None:
     """
     
     missing: list[str] = []
-    if not DOCS_FOLDER_RAW:
+    if not config.DOCS_FOLDER:
         missing.append("DOCS_FOLDER")
-    if not COLLECTION_NAME:
+    if not config.COGNITOR_COLLECTION_NAME:
         missing.append("COGNITOR_COLLECTION_NAME")
-    if not COGNITOR_URL:
+    if not config.COGNITOR_URL:
         missing.append("COGNITOR_URL")
     if missing:
         missing_values = ", ".join(missing)
         raise ValueError(f"Missing required environment variable(s): {missing_values}")
     
     # Redundant check for type safety and to satisfy static analysis
-    assert DOCS_FOLDER_RAW is not None and \
-        COLLECTION_NAME is not None and \
-        COGNITOR_URL is not None
+    assert config.DOCS_FOLDER is not None and \
+        config.COGNITOR_COLLECTION_NAME is not None and \
+        config.COGNITOR_URL is not None
 
-    docs_folder = Path(DOCS_FOLDER_RAW).expanduser().resolve()
+    docs_folder = Path(config.DOCS_FOLDER).expanduser().resolve()
     if not docs_folder.exists():
         raise FileNotFoundError(f"Configured folder does not exist: {docs_folder}")
     if not docs_folder.is_dir():
         raise NotADirectoryError(f"Configured folder is not a directory: {docs_folder}")
 
     doc_connector = _load_doc_connector()
+    ingestion_service = doc_connector.DocumentIngestionService(
+        chunker=doc_connector.DocumentChunker(
+            chunk_size=config.DEFAULT_CHUNK_SIZE,
+            overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
+            encoding_name=config.DEFAULT_ENCODING_NAME,
+        )
+    )
     stop_event = threading.Event()
 
     def _handle_shutdown(signum: int, _frame: Any) -> None:
-        print(f"Received signal {signum}; shutting down daemon...")
+        logger.info("Received signal %s; shutting down daemon...", signum)
         stop_event.set()
 
     signal.signal(signal.SIGINT, _handle_shutdown)
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
-    print(
-        "Starting Cognitor sync daemon | "
-        f"folder={docs_folder} collection={COLLECTION_NAME} "
-        f"url={COGNITOR_URL} interval={SYNC_INTERVAL_SECONDS}s"
+    logger.info(
+        "Starting Cognitor sync daemon | folder=%s collection=%s url=%s interval=%ss",
+        docs_folder,
+        config.COGNITOR_COLLECTION_NAME,
+        config.COGNITOR_URL,
+        config.SYNC_INTERVAL_SECONDS,
     )
 
-    with Cognitor(COGNITOR_URL, api_key=COGNITOR_API_KEY) as client:
-        sync_once(client, COLLECTION_NAME, docs_folder, doc_connector)
+    with Cognitor(config.COGNITOR_URL, api_key=config.COGNITOR_API_KEY) as client:
+        sync_once(client, config.COGNITOR_COLLECTION_NAME, docs_folder, ingestion_service)
 
-        while not stop_event.wait(SYNC_INTERVAL_SECONDS):
+        while not stop_event.wait(config.SYNC_INTERVAL_SECONDS):
             try:
-                sync_once(client, COLLECTION_NAME, docs_folder, doc_connector)
+                sync_once(client, config.COGNITOR_COLLECTION_NAME, docs_folder, ingestion_service)
             except Exception as exc:
-                print(f"Sync pass failed: {exc}")
+                logger.error("Sync pass failed: %s", exc)
+
+
+PID_FILE = Path("logs") / "cognitor-worker.pid"
 
 
 def main() -> None:
-    run_daemon()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Cognitor sync worker")
+    parser.add_argument(
+        "-d", "--daemon", action="store_true", help="Run detached in the background"
+    )
+    args = parser.parse_args()
+
+    if not args.daemon:
+        run_daemon()
+        return
+
+    # Daemon mode: spawn a detached subprocess that runs this same script without -d
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    kwargs: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+
+    if os.name == "nt":
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        )
+    else:
+        kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen([sys.executable, __file__], **kwargs)
+    PID_FILE.write_text(str(proc.pid))
+    print(f"Cognitor worker started in background (PID {proc.pid}). Logs are being written to {PID_FILE.parent.resolve()}.")
+    print("Use 'python src/stop_worker.py' to stop the background worker.")
 
 
 if __name__ == "__main__":
