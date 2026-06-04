@@ -1,18 +1,15 @@
-import math
+import logging
 import struct
 from pathlib import Path
-from typing import Any
-
+from typing import Any, Optional
 import olefile
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
-from tiktoken import get_encoding
+
+from utils.chunking import DocumentChunker
 
 
-CHUNK_SIZE = 500  # tokens per chunk
-OVERLAP_RATIO = 0.15  # 15% chunk overlap
-OVERLAP_SIZE = math.ceil(CHUNK_SIZE * OVERLAP_RATIO)
-ENCODING_NAME = "cl100k_base"
+logger = logging.getLogger(__name__)
 
 
 def starts_new_page(para: Any) -> bool:
@@ -297,30 +294,90 @@ def make_chunks(
     return chunks
 
 
+class DocumentIngestionService:
+    def __init__(
+        self,
+        chunker: Optional[DocumentChunker] = None,
+        *,
+        chunk_size: int = 500,
+        overlap_ratio: float = 0.15,
+        encoding_name: str = "cl100k_base",
+        overlap_size: Optional[int] = None,
+    ) -> None:
+        self.chunker = chunker or DocumentChunker(
+            chunk_size=chunk_size,
+            overlap_size=overlap_size,
+            encoding_name=encoding_name,
+            overlap_ratio=overlap_ratio,
+        )
+
+    def build_doc_chunks(self, path: Path) -> list[dict[str, Any]]:
+        paragraphs = extract_paragraphs(path)
+        if not paragraphs:
+            return []
+
+        return self.chunker.chunk_paragraphs(paragraphs)
+
+    def ingest_file(
+        self,
+        client: Any,
+        collection: str,
+        path: Path,
+        file_signature: str,
+    ) -> int:
+        try:
+            chunks = self.build_doc_chunks(path)
+        except Exception as exc:
+            logger.warning("Skipped %s: %s", path.name, exc)
+            return 0
+
+        if not chunks:
+            logger.info("Skipped %s: no text found", path.name)
+            return 0
+
+        texts = [chunk["text"] for chunk in chunks]
+        metadatas = [
+            {
+                "source_name": path.name,
+                "source_path": str(path.resolve()),
+                "paragraph_num": chunk["paragraph_num"],
+                "page_num": chunk["page_num"],
+                "file_signature": file_signature,
+            }
+            for chunk in chunks
+        ]
+
+        ids = client.bulk_add_documents(collection, texts, metadatas)
+        logger.info("%s: %s chunk(s) ingested", path.name, len(ids))
+        return len(ids)
+
+
 def build_doc_chunks(
     path: Path,
     *,
-    chunk_size: int = CHUNK_SIZE,
-    overlap_size: int = OVERLAP_SIZE,
-    encoding_name: str = ENCODING_NAME,
+    chunk_size: int = 500,
+    overlap_size: int = 75,
+    encoding_name: str = "cl100k_base",
 ) -> list[dict[str, Any]]:
     """
     Build text chunks from a document file, handling both .docx and .doc formats.
-    
+
     Args:
         path: Path to the document file (.docx or .doc).
         chunk_size: The maximum number of tokens in a chunk.
         overlap_size: The number of tokens to overlap between consecutive chunks.
         encoding_name: The name of the encoding to use from tiktoken.
     Returns:
-        A list of dictionaries, each containing the text, paragraph number, and page number of 
+        A list of dictionaries, each containing the text, paragraph number, and page number of
         a chunk.
     """
-    
-    paragraphs = extract_paragraphs(path)
-    if not paragraphs:
-        return []
 
-    enc = get_encoding(encoding_name)
-    stream = build_token_stream(paragraphs, enc)
-    return make_chunks(stream, chunk_size, overlap_size, enc)
+    service = DocumentIngestionService(
+        DocumentChunker(
+            chunk_size=chunk_size,
+            overlap_ratio=overlap_size / chunk_size,
+            overlap_size=overlap_size,
+            encoding_name=encoding_name,
+        )
+    )
+    return service.build_doc_chunks(path)
