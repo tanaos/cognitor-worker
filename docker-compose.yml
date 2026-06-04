@@ -1,0 +1,24 @@
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cognitor-worker:latest
+    container_name: cognitor-worker
+    environment:
+      DOCS_FOLDER: /data/docs
+      COGNITOR_URL: ${COGNITOR_URL}
+      COGNITOR_COLLECTION_NAME: ${COGNITOR_COLLECTION_NAME}
+      COGNITOR_API_KEY: ${COGNITOR_API_KEY:-}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-300}
+    volumes:
+      - type: bind
+        source: ${DOCS_FOLDER}
+        target: /data/docs
+        read_only: true
+      - type: bind
+        source: ./logs
+        target: /app/logs
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
