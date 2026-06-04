@@ -30,8 +30,9 @@ Optional:
 ## Run
 
 ```bash
-source .venv/bin/activate
-python src/worker-daemon/main.py
+python src/start_worker.py         # foreground
+python src/start_worker.py -d      # background daemon
+python src/stop_worker.py          # stop the background daemon
 ```
 
 Stop with `Ctrl+C` (graceful shutdown).

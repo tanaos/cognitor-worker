@@ -21,3 +21,6 @@ docs/
 
 # Environment variables
 .env
+
+# Logs
+logs/

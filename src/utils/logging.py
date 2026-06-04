@@ -1,7 +1,10 @@
 import logging
 import logging.config
-import os
-from typing import Dict, Any
+from pathlib import Path
+from typing import Any, Dict
+
+
+LOG_FILE_PATH = Path("logs") / "cognitor-worker.log"
 
 
 class ConditionalFormatter(logging.Formatter):
@@ -25,10 +28,12 @@ class ConditionalFormatter(logging.Formatter):
                 else:
                     tag_segment = f" | [{log_type}]"
 
-        # Display pathname + lineno only for ERROR and CRITICAL
         if record.levelno >= logging.ERROR:
-            return f"{self.formatTime(record)} | [{record.levelname}] | ({record.pathname}:{record.lineno}){tag_segment} | {record.getMessage()}"
-        
+            return (
+                f"{self.formatTime(record)} | [{record.levelname}] | "
+                f"({record.pathname}:{record.lineno}){tag_segment} | {record.getMessage()}"
+            )
+
         return f"{self.formatTime(record)} | [{record.levelname}]{tag_segment} | {record.getMessage()}"
 
 LOGGING_CONFIG: Dict[str, Any] = {
@@ -47,10 +52,18 @@ LOGGING_CONFIG: Dict[str, Any] = {
             "stream": "ext://sys.stdout",
             "level": "INFO",
         },
+        "file": {
+            "formatter": "default",
+            "class": "logging.FileHandler",
+            "filename": str(LOG_FILE_PATH),
+            "mode": "a",
+            "encoding": "utf-8",
+            "level": "INFO",
+        },
     },
-    "root": {"handlers": ["console"], "level": "INFO"},
+    "root": {"handlers": ["console", "file"], "level": "INFO"},
 }
 
-def setup_logging():
-    os.makedirs("logs", exist_ok=True)
+def setup_logging() -> None:
+    LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     logging.config.dictConfig(LOGGING_CONFIG)
