@@ -1,14 +1,12 @@
 import importlib.util
 import logging
-import os
 import signal
 import threading
 from pathlib import Path
 from types import ModuleType
 from typing import Any
-import subprocess
-import sys
-from cognitor import Cognitor
+from cognitor import Cognitor, ConflictError, NotFoundError
+from pydantic import ValidationError
 from config.settings import Config
 from utils.logging import setup_logging
 
@@ -16,9 +14,6 @@ from utils.logging import setup_logging
 setup_logging()
 
 logger = logging.getLogger(__name__)
-
-
-config = Config() # type: ignore[assignment]
 
 
 def _load_doc_connector() -> ModuleType:
@@ -33,6 +28,43 @@ def _load_doc_connector() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_pdf_connector() -> ModuleType:
+    """
+    Dynamically load the PDF connector module from src/pdf-connector/main.py.
+    """
+
+    connector_path = Path(__file__).parent / "pdf-connector" / "main.py"
+    spec = importlib.util.spec_from_file_location("pdf_connector_main", connector_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load PDF connector module at {connector_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_config() -> Config:
+    """
+    Load runtime configuration and convert missing settings into a direct startup error.
+    """
+
+    try:
+        return Config()  # type: ignore[return-value]
+    except ValidationError as exc:
+        missing = sorted(
+            {
+                str(err["loc"][0])
+                for err in exc.errors()
+                if err.get("type") == "missing" and err.get("loc")
+            }
+        )
+        if missing:
+            missing_values = ", ".join(missing)
+            raise ValueError(
+                f"Missing required environment variable(s): {missing_values}"
+            ) from exc
+        raise
 
 
 def _build_file_signature(path: Path) -> str:
@@ -126,9 +158,15 @@ def _ensure_collection(client: Cognitor, collection: str) -> None:
     
     try:
         client.get_collection(collection)
-    except Exception:
+        return
+    except NotFoundError:
+        pass
+
+    try:
         client.create_collection(collection)
         logger.info("Created collection '%s'", collection)
+    except ConflictError:
+        logger.info("Collection '%s' already exists", collection)
 
 
 def _ingest_doc_file(
@@ -152,11 +190,26 @@ def _ingest_doc_file(
     ingestion_service.ingest_file(client, collection, path, file_signature)
 
 
+def _ingestion_service_for_path(
+    path: Path,
+    doc_ingestion_service: Any,
+    pdf_ingestion_service: Any,
+) -> Any:
+    """
+    Select the ingestion service that owns the given file type.
+    """
+
+    if path.suffix.lower() == ".pdf":
+        return pdf_ingestion_service
+    return doc_ingestion_service
+
+
 def sync_once(
     client: Cognitor,
     collection: str,
     docs_folder: Path,
-    ingestion_service: Any,
+    doc_ingestion_service: Any,
+    pdf_ingestion_service: Any,
 ) -> None:
     """
     Perform a single synchronization pass between the local folder and the Cognitor collection.
@@ -165,13 +218,16 @@ def sync_once(
         client: An instance of the Cognitor client.
         collection: The name of the collection to synchronize with.
         docs_folder: The local folder containing document files.
-        ingestion_service: The document ingestion service.
+        doc_ingestion_service: The document ingestion service.
+        pdf_ingestion_service: The PDF ingestion service.
     """
     
     _ensure_collection(client, collection)
 
     local_files = sorted(
-        list(docs_folder.rglob("*.docx")) + list(docs_folder.rglob("*.doc"))
+        list(docs_folder.rglob("*.docx"))
+        + list(docs_folder.rglob("*.doc"))
+        + list(docs_folder.rglob("*.pdf"))
     )
     local_map = {str(path.resolve()): path for path in local_files}
 
@@ -195,7 +251,13 @@ def sync_once(
 
         if not existing_docs:
             logger.info("Ingesting new file: %s", path.name)
-            _ingest_doc_file(client, collection, path, signature, ingestion_service)
+            _ingest_doc_file(
+                client,
+                collection,
+                path,
+                signature,
+                _ingestion_service_for_path(path, doc_ingestion_service, pdf_ingestion_service),
+            )
             added_or_updated += 1
             continue
 
@@ -212,7 +274,13 @@ def sync_once(
                 path.name,
                 deleted,
             )
-            _ingest_doc_file(client, collection, path, signature, ingestion_service)
+            _ingest_doc_file(
+                client,
+                collection,
+                path,
+                signature,
+                _ingestion_service_for_path(path, doc_ingestion_service, pdf_ingestion_service),
+            )
             added_or_updated += 1
 
     logger.info(
@@ -224,22 +292,13 @@ def sync_once(
     )
 
 
-def run_daemon() -> None:
+def run_worker() -> None:
     """
-    Run the Cognitor sync daemon, which continuously synchronizes the local folder
+    Run the Cognitor sync worker, which continuously synchronizes the local folder
     with the Cognitor collection at regular intervals.
     """
     
-    missing: list[str] = []
-    if not config.DOCS_FOLDER:
-        missing.append("DOCS_FOLDER")
-    if not config.COGNITOR_COLLECTION_NAME:
-        missing.append("COGNITOR_COLLECTION_NAME")
-    if not config.COGNITOR_URL:
-        missing.append("COGNITOR_URL")
-    if missing:
-        missing_values = ", ".join(missing)
-        raise ValueError(f"Missing required environment variable(s): {missing_values}")
+    config = _load_config()
     
     # Redundant check for type safety and to satisfy static analysis
     assert config.DOCS_FOLDER is not None and \
@@ -253,8 +312,16 @@ def run_daemon() -> None:
         raise NotADirectoryError(f"Configured folder is not a directory: {docs_folder}")
 
     doc_connector = _load_doc_connector()
-    ingestion_service = doc_connector.DocumentIngestionService(
+    pdf_connector = _load_pdf_connector()
+    doc_ingestion_service = doc_connector.DocumentIngestionService(
         chunker=doc_connector.DocumentChunker(
+            chunk_size=config.DEFAULT_CHUNK_SIZE,
+            overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
+            encoding_name=config.DEFAULT_ENCODING_NAME,
+        )
+    )
+    pdf_ingestion_service = pdf_connector.PDFIngestionService(
+        chunker=pdf_connector.DocumentChunker(
             chunk_size=config.DEFAULT_CHUNK_SIZE,
             overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
             encoding_name=config.DEFAULT_ENCODING_NAME,
@@ -263,14 +330,14 @@ def run_daemon() -> None:
     stop_event = threading.Event()
 
     def _handle_shutdown(signum: int, _frame: Any) -> None:
-        logger.info("Received signal %s; shutting down daemon...", signum)
+        logger.info("Received signal %s; shutting down worker...", signum)
         stop_event.set()
 
     signal.signal(signal.SIGINT, _handle_shutdown)
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
     logger.info(
-        "Starting Cognitor sync daemon | folder=%s collection=%s url=%s interval=%ss",
+        "Starting Cognitor sync worker | folder=%s collection=%s url=%s interval=%ss",
         docs_folder,
         config.COGNITOR_COLLECTION_NAME,
         config.COGNITOR_URL,
@@ -278,51 +345,32 @@ def run_daemon() -> None:
     )
 
     with Cognitor(config.COGNITOR_URL, api_key=config.COGNITOR_API_KEY) as client:
-        sync_once(client, config.COGNITOR_COLLECTION_NAME, docs_folder, ingestion_service)
+        sync_once(
+            client,
+            config.COGNITOR_COLLECTION_NAME,
+            docs_folder,
+            doc_ingestion_service,
+            pdf_ingestion_service,
+        )
 
         while not stop_event.wait(config.SYNC_INTERVAL_SECONDS):
             try:
-                sync_once(client, config.COGNITOR_COLLECTION_NAME, docs_folder, ingestion_service)
+                sync_once(
+                    client,
+                    config.COGNITOR_COLLECTION_NAME,
+                    docs_folder,
+                    doc_ingestion_service,
+                    pdf_ingestion_service,
+                )
             except Exception as exc:
                 logger.error("Sync pass failed: %s", exc)
 
-
-PID_FILE = Path("logs") / "cognitor-worker.pid"
-
-
 def main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Cognitor sync worker")
-    parser.add_argument(
-        "-d", "--daemon", action="store_true", help="Run detached in the background"
-    )
-    args = parser.parse_args()
-
-    if not args.daemon:
-        run_daemon()
-        return
-
-    # Daemon mode: spawn a detached subprocess that runs this same script without -d
-    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    kwargs: dict[str, Any] = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-    }
-
-    if os.name == "nt":
-        kwargs["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-        )
-    else:
-        kwargs["start_new_session"] = True
-
-    proc = subprocess.Popen([sys.executable, __file__], **kwargs)
-    PID_FILE.write_text(str(proc.pid))
-    print(f"Cognitor worker started in background (PID {proc.pid}). Logs are being written to {PID_FILE.parent.resolve()}.")
-    print("Use 'python src/stop_worker.py' to stop the background worker.")
+    try:
+        run_worker()
+    except (ValueError, FileNotFoundError, NotADirectoryError) as exc:
+        logger.error("%s", exc)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":
