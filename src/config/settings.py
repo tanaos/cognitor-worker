@@ -8,7 +8,7 @@ class Config(BaseSettings):
     COGNITOR_URL: str
     COGNITOR_API_KEY: Optional[str] = None
     DOCS_FOLDER: str
-    COGNITOR_COLLECTION_NAME: str = "cognitor-worker"
+    COGNITOR_COLLECTION_NAME: str = "cognitor-worker-collection"
     
     # Chunking configuration
     DEFAULT_CHUNK_SIZE: int = 500
