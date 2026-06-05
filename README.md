@@ -2,8 +2,9 @@
 
 This worker keeps a local folder synchronized with a Cognitor collection, by performing automatic parsing, chunking, indexing and ingestion. The following types of files are currently supported:
 
-- DOC/DOCX
-- PDF
+- .doc and .docx
+- .pdf
+- .md
 
 ## Behavior
 
