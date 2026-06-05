@@ -64,6 +64,21 @@ LOGGING_CONFIG: Dict[str, Any] = {
     "root": {"handlers": ["console", "file"], "level": "INFO"},
 }
 
+CONSOLE_ONLY_LOGGING_CONFIG: Dict[str, Any] = {
+    **LOGGING_CONFIG,
+    "handlers": {
+        "console": LOGGING_CONFIG["handlers"]["console"],
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+}
+
 def setup_logging() -> None:
     LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    logging.config.dictConfig(LOGGING_CONFIG)
+    try:
+        logging.config.dictConfig(LOGGING_CONFIG)
+    except (OSError, PermissionError, ValueError):
+        logging.config.dictConfig(CONSOLE_ONLY_LOGGING_CONFIG)
+        logging.getLogger(__name__).warning(
+            "File logging disabled because %s is not writable",
+            LOG_FILE_PATH.resolve(),
+        )
