@@ -1,5 +1,6 @@
 import importlib.util
 import logging
+import math
 import signal
 import threading
 from pathlib import Path
@@ -39,6 +40,20 @@ def _load_pdf_connector() -> ModuleType:
     spec = importlib.util.spec_from_file_location("pdf_connector_main", connector_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load PDF connector module at {connector_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_md_connector() -> ModuleType:
+    """
+    Dynamically load the Markdown connector module from src/md-connector/main.py.
+    """
+
+    connector_path = Path(__file__).parent / "md-connector" / "main.py"
+    spec = importlib.util.spec_from_file_location("md_connector_main", connector_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load Markdown connector module at {connector_path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -169,12 +184,48 @@ def _ensure_collection(client: Cognitor, collection: str) -> None:
         logger.info("Collection '%s' already exists", collection)
 
 
+def _wait_for_cognitor_ready(
+    client: Cognitor,
+    stop_event: threading.Event,
+    *,
+    poll_interval_seconds: int = 2,
+) -> None:
+    """
+    Block until Cognitor reports readiness via GET /health/ready.
+
+    Args:
+        client: An instance of the Cognitor client.
+        stop_event: Worker stop event used to interrupt readiness waiting.
+        poll_interval_seconds: Delay between readiness checks while loading.
+    """
+
+    while not stop_event.is_set():
+        try:
+            status = client.health_ready()
+        except Exception as exc:
+            logger.warning("Health check failed while waiting for Cognitor readiness: %s", exc)
+            status = "loading"
+
+        if status == "ready":
+            logger.info("Cognitor is ready")
+            return
+
+        logger.info("Cognitor not ready yet; waiting %ss before retry", poll_interval_seconds)
+        stop_event.wait(poll_interval_seconds)
+
+    raise RuntimeError("Worker stopped while waiting for Cognitor readiness")
+
+
 def _ingest_doc_file(
     client: Cognitor,
     collection: str,
     path: Path,
     file_signature: str,
     ingestion_service: Any,
+    *,
+    chunk_size: int,
+    overlap_ratio: float,
+    encoding_name: str,
 ) -> None:
     """
     Ingest a document file into the specified collection.
@@ -185,31 +236,54 @@ def _ingest_doc_file(
         path: The path to the document file.
         file_signature: The signature of the file.
         ingestion_service: The document ingestion service.
+        chunk_size: The chunk size to use during ingestion.
+        overlap_ratio: The overlap ratio used to compute token overlap.
+        encoding_name: The token encoding to use.
     """
 
-    ingestion_service.ingest_file(client, collection, path, file_signature)
+    overlap_size = max(1, math.ceil(chunk_size * overlap_ratio))
+    if overlap_size >= chunk_size:
+        overlap_size = chunk_size - 1
+
+    ingestion_service.ingest_file(
+        client,
+        collection,
+        path,
+        file_signature,
+        chunk_size=chunk_size,
+        overlap_size=overlap_size,
+        encoding_name=encoding_name,
+    )
 
 
 def _ingestion_service_for_path(
     path: Path,
-    doc_ingestion_service: Any,
-    pdf_ingestion_service: Any,
+    doc_connector: ModuleType,
+    pdf_connector: ModuleType,
+    md_connector: ModuleType,
 ) -> Any:
     """
     Select the ingestion service that owns the given file type.
     """
 
     if path.suffix.lower() == ".pdf":
-        return pdf_ingestion_service
-    return doc_ingestion_service
+        return pdf_connector
+    if path.suffix.lower() == ".md":
+        return md_connector
+    return doc_connector
 
 
 def sync_once(
     client: Cognitor,
     collection: str,
     docs_folder: Path,
-    doc_ingestion_service: Any,
-    pdf_ingestion_service: Any,
+    doc_connector: ModuleType,
+    pdf_connector: ModuleType,
+    md_connector: ModuleType,
+    *,
+    chunk_size: int,
+    overlap_ratio: float,
+    encoding_name: str,
 ) -> None:
     """
     Perform a single synchronization pass between the local folder and the Cognitor collection.
@@ -218,8 +292,12 @@ def sync_once(
         client: An instance of the Cognitor client.
         collection: The name of the collection to synchronize with.
         docs_folder: The local folder containing document files.
-        doc_ingestion_service: The document ingestion service.
-        pdf_ingestion_service: The PDF ingestion service.
+        doc_connector: The .doc/.docx connector module.
+        pdf_connector: The .pdf connector module.
+        md_connector: The .md connector module.
+        chunk_size: The chunk size to use during ingestion.
+        overlap_ratio: The overlap ratio used to compute token overlap.
+        encoding_name: The token encoding to use.
     """
     
     _ensure_collection(client, collection)
@@ -228,6 +306,7 @@ def sync_once(
         list(docs_folder.rglob("*.docx"))
         + list(docs_folder.rglob("*.doc"))
         + list(docs_folder.rglob("*.pdf"))
+        + list(docs_folder.rglob("*.md"))
     )
     local_map = {str(path.resolve()): path for path in local_files}
 
@@ -256,7 +335,15 @@ def sync_once(
                 collection,
                 path,
                 signature,
-                _ingestion_service_for_path(path, doc_ingestion_service, pdf_ingestion_service),
+                _ingestion_service_for_path(
+                    path,
+                    doc_connector,
+                    pdf_connector,
+                    md_connector,
+                ),
+                chunk_size=chunk_size,
+                overlap_ratio=overlap_ratio,
+                encoding_name=encoding_name,
             )
             added_or_updated += 1
             continue
@@ -279,7 +366,15 @@ def sync_once(
                 collection,
                 path,
                 signature,
-                _ingestion_service_for_path(path, doc_ingestion_service, pdf_ingestion_service),
+                _ingestion_service_for_path(
+                    path,
+                    doc_connector,
+                    pdf_connector,
+                    md_connector,
+                ),
+                chunk_size=chunk_size,
+                overlap_ratio=overlap_ratio,
+                encoding_name=encoding_name,
             )
             added_or_updated += 1
 
@@ -313,20 +408,7 @@ def run_worker() -> None:
 
     doc_connector = _load_doc_connector()
     pdf_connector = _load_pdf_connector()
-    doc_ingestion_service = doc_connector.DocumentIngestionService(
-        chunker=doc_connector.DocumentChunker(
-            chunk_size=config.DEFAULT_CHUNK_SIZE,
-            overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
-            encoding_name=config.DEFAULT_ENCODING_NAME,
-        )
-    )
-    pdf_ingestion_service = pdf_connector.PDFIngestionService(
-        chunker=pdf_connector.DocumentChunker(
-            chunk_size=config.DEFAULT_CHUNK_SIZE,
-            overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
-            encoding_name=config.DEFAULT_ENCODING_NAME,
-        )
-    )
+    md_connector = _load_md_connector()
     stop_event = threading.Event()
 
     def _handle_shutdown(signum: int, _frame: Any) -> None:
@@ -345,12 +427,18 @@ def run_worker() -> None:
     )
 
     with Cognitor(config.COGNITOR_URL, api_key=config.COGNITOR_API_KEY) as client:
+        _wait_for_cognitor_ready(client, stop_event)
+
         sync_once(
             client,
             config.COGNITOR_COLLECTION_NAME,
             docs_folder,
-            doc_ingestion_service,
-            pdf_ingestion_service,
+            doc_connector,
+            pdf_connector,
+            md_connector,
+            chunk_size=config.DEFAULT_CHUNK_SIZE,
+            overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
+            encoding_name=config.DEFAULT_ENCODING_NAME,
         )
 
         while not stop_event.wait(config.SYNC_INTERVAL_SECONDS):
@@ -359,8 +447,12 @@ def run_worker() -> None:
                     client,
                     config.COGNITOR_COLLECTION_NAME,
                     docs_folder,
-                    doc_ingestion_service,
-                    pdf_ingestion_service,
+                    doc_connector,
+                    pdf_connector,
+                    md_connector,
+                    chunk_size=config.DEFAULT_CHUNK_SIZE,
+                    overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
+                    encoding_name=config.DEFAULT_ENCODING_NAME,
                 )
             except Exception as exc:
                 logger.error("Sync pass failed: %s", exc)
