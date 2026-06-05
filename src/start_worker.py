@@ -8,9 +8,7 @@ from types import ModuleType
 from typing import Any
 import subprocess
 import sys
-
 from cognitor import Cognitor
-
 from config.settings import Config
 from utils.logging import setup_logging
 
