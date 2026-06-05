@@ -59,6 +59,20 @@ def _load_md_connector() -> ModuleType:
     return module
 
 
+def _load_html_connector() -> ModuleType:
+    """
+    Dynamically load the HTML connector module from src/html-connector/main.py.
+    """
+
+    connector_path = Path(__file__).parent / "html-connector" / "main.py"
+    spec = importlib.util.spec_from_file_location("html_connector_main", connector_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load HTML connector module at {connector_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_config() -> Config:
     """
     Load runtime configuration and convert missing settings into a direct startup error.
@@ -188,7 +202,7 @@ def _wait_for_cognitor_ready(
     client: Cognitor,
     stop_event: threading.Event,
     *,
-    poll_interval_seconds: int = 2,
+    poll_interval_seconds: int = 10,
 ) -> None:
     """
     Block until Cognitor reports readiness via GET /health/ready.
@@ -261,6 +275,7 @@ def _ingestion_service_for_path(
     doc_connector: ModuleType,
     pdf_connector: ModuleType,
     md_connector: ModuleType,
+    html_connector: ModuleType,
 ) -> Any:
     """
     Select the ingestion service that owns the given file type.
@@ -270,6 +285,8 @@ def _ingestion_service_for_path(
         return pdf_connector
     if path.suffix.lower() == ".md":
         return md_connector
+    if path.suffix.lower() in {".html", ".htm"}:
+        return html_connector
     return doc_connector
 
 
@@ -280,6 +297,7 @@ def sync_once(
     doc_connector: ModuleType,
     pdf_connector: ModuleType,
     md_connector: ModuleType,
+    html_connector: ModuleType,
     *,
     chunk_size: int,
     overlap_ratio: float,
@@ -295,6 +313,7 @@ def sync_once(
         doc_connector: The .doc/.docx connector module.
         pdf_connector: The .pdf connector module.
         md_connector: The .md connector module.
+        html_connector: The .html/.htm connector module.
         chunk_size: The chunk size to use during ingestion.
         overlap_ratio: The overlap ratio used to compute token overlap.
         encoding_name: The token encoding to use.
@@ -307,6 +326,8 @@ def sync_once(
         + list(docs_folder.rglob("*.doc"))
         + list(docs_folder.rglob("*.pdf"))
         + list(docs_folder.rglob("*.md"))
+        + list(docs_folder.rglob("*.html"))
+        + list(docs_folder.rglob("*.htm"))
     )
     local_map = {str(path.resolve()): path for path in local_files}
 
@@ -340,6 +361,7 @@ def sync_once(
                     doc_connector,
                     pdf_connector,
                     md_connector,
+                    html_connector,
                 ),
                 chunk_size=chunk_size,
                 overlap_ratio=overlap_ratio,
@@ -371,6 +393,7 @@ def sync_once(
                     doc_connector,
                     pdf_connector,
                     md_connector,
+                    html_connector,
                 ),
                 chunk_size=chunk_size,
                 overlap_ratio=overlap_ratio,
@@ -409,6 +432,7 @@ def run_worker() -> None:
     doc_connector = _load_doc_connector()
     pdf_connector = _load_pdf_connector()
     md_connector = _load_md_connector()
+    html_connector = _load_html_connector()
     stop_event = threading.Event()
 
     def _handle_shutdown(signum: int, _frame: Any) -> None:
@@ -436,6 +460,7 @@ def run_worker() -> None:
             doc_connector,
             pdf_connector,
             md_connector,
+            html_connector,
             chunk_size=config.DEFAULT_CHUNK_SIZE,
             overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
             encoding_name=config.DEFAULT_ENCODING_NAME,
@@ -450,6 +475,7 @@ def run_worker() -> None:
                     doc_connector,
                     pdf_connector,
                     md_connector,
+                    html_connector,
                     chunk_size=config.DEFAULT_CHUNK_SIZE,
                     overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
                     encoding_name=config.DEFAULT_ENCODING_NAME,

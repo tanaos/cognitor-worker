@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.13.4",
     "cognitor>=0.3.0",
     "olefile>=0.47",
     "pydantic-settings>=2.14.1",
