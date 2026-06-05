@@ -1,7 +1,7 @@
 import logging
 import struct
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 import olefile
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
@@ -294,64 +294,6 @@ def make_chunks(
     return chunks
 
 
-class DocumentIngestionService:
-    def __init__(
-        self,
-        chunker: Optional[DocumentChunker] = None,
-        *,
-        chunk_size: int = 500,
-        overlap_ratio: float = 0.15,
-        encoding_name: str = "cl100k_base",
-        overlap_size: Optional[int] = None,
-    ) -> None:
-        self.chunker = chunker or DocumentChunker(
-            chunk_size=chunk_size,
-            overlap_size=overlap_size,
-            encoding_name=encoding_name,
-            overlap_ratio=overlap_ratio,
-        )
-
-    def build_doc_chunks(self, path: Path) -> list[dict[str, Any]]:
-        paragraphs = extract_paragraphs(path)
-        if not paragraphs:
-            return []
-
-        return self.chunker.chunk_paragraphs(paragraphs)
-
-    def ingest_file(
-        self,
-        client: Any,
-        collection: str,
-        path: Path,
-        file_signature: str,
-    ) -> int:
-        try:
-            chunks = self.build_doc_chunks(path)
-        except Exception as exc:
-            logger.warning("Skipped %s: %s", path.name, exc)
-            return 0
-
-        if not chunks:
-            logger.info("Skipped %s: no text found", path.name)
-            return 0
-
-        texts = [chunk["text"] for chunk in chunks]
-        metadatas = [
-            {
-                "source_name": path.name,
-                "source_path": str(path.resolve()),
-                "paragraph_num": chunk["paragraph_num"],
-                "page_num": chunk["page_num"],
-                "file_signature": file_signature,
-            }
-            for chunk in chunks
-        ]
-
-        ids = client.bulk_add_documents(collection, texts, metadatas)
-        logger.info("%s: %s chunk(s) ingested", path.name, len(ids))
-        return len(ids)
-
-
 def build_doc_chunks(
     path: Path,
     *,
@@ -372,12 +314,60 @@ def build_doc_chunks(
         a chunk.
     """
 
-    service = DocumentIngestionService(
-        DocumentChunker(
+    paragraphs = extract_paragraphs(path)
+    if not paragraphs:
+        return []
+
+    chunker = DocumentChunker(
+        chunk_size=chunk_size,
+        overlap_ratio=overlap_size / chunk_size,
+        overlap_size=overlap_size,
+        encoding_name=encoding_name,
+    )
+    return chunker.chunk_paragraphs(paragraphs)
+
+
+def ingest_file(
+    client: Any,
+    collection: str,
+    path: Path,
+    file_signature: str,
+    *,
+    chunk_size: int = 500,
+    overlap_size: int = 75,
+    encoding_name: str = "cl100k_base",
+) -> int:
+    """
+    Ingest a .docx/.doc file into the target collection.
+    """
+
+    try:
+        chunks = build_doc_chunks(
+            path,
             chunk_size=chunk_size,
-            overlap_ratio=overlap_size / chunk_size,
             overlap_size=overlap_size,
             encoding_name=encoding_name,
         )
-    )
-    return service.build_doc_chunks(path)
+    except Exception as exc:
+        logger.warning("Skipped %s: %s", path.name, exc)
+        return 0
+
+    if not chunks:
+        logger.info("Skipped %s: no text found", path.name)
+        return 0
+
+    texts = [chunk["text"] for chunk in chunks]
+    metadatas = [
+        {
+            "source_name": path.name,
+            "source_path": str(path.resolve()),
+            "paragraph_num": chunk["paragraph_num"],
+            "page_num": chunk["page_num"],
+            "file_signature": file_signature,
+        }
+        for chunk in chunks
+    ]
+
+    ids = client.bulk_add_documents(collection, texts, metadatas)
+    logger.info("%s: %s chunk(s) ingested", path.name, len(ids))
+    return len(ids)
