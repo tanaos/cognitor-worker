@@ -15,5 +15,5 @@ dependencies = [
     "tiktoken>=0.13.0",
     "llama_index",
     "llama-index-embeddings-huggingface",
-    "sentence-transformer"
+    "sentence-transformers>=5.5.1",
 ]

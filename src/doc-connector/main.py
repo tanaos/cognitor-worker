@@ -6,7 +6,7 @@ import olefile
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 
-from utils.chunking import DocumentChunker
+from chunking import build_chunks_from_paragraphs
 
 
 logger = logging.getLogger(__name__)
@@ -297,9 +297,13 @@ def make_chunks(
 def build_doc_chunks(
     path: Path,
     *,
+    chunker_type: str = "semantic",
     chunk_size: int = 500,
     overlap_size: int = 75,
     encoding_name: str = "cl100k_base",
+    semantic_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+    semantic_breakpoint_percentile: int = 70,
+    semantic_repair_sentence_boundaries: bool = True,
 ) -> list[dict[str, Any]]:
     """
     Build text chunks from a document file, handling both .docx and .doc formats.
@@ -318,13 +322,16 @@ def build_doc_chunks(
     if not paragraphs:
         return []
 
-    chunker = DocumentChunker(
+    return build_chunks_from_paragraphs(
+        paragraphs,
+        chunker_type=chunker_type,
         chunk_size=chunk_size,
-        overlap_ratio=overlap_size / chunk_size,
         overlap_size=overlap_size,
         encoding_name=encoding_name,
+        semantic_model_name=semantic_model_name,
+        semantic_breakpoint_percentile=semantic_breakpoint_percentile,
+        semantic_repair_sentence_boundaries=semantic_repair_sentence_boundaries,
     )
-    return chunker.chunk_paragraphs(paragraphs)
 
 
 def ingest_file(
@@ -333,9 +340,13 @@ def ingest_file(
     path: Path,
     file_signature: str,
     *,
+    chunker_type: str = "semantic",
     chunk_size: int = 500,
     overlap_size: int = 75,
     encoding_name: str = "cl100k_base",
+    semantic_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+    semantic_breakpoint_percentile: int = 70,
+    semantic_repair_sentence_boundaries: bool = True,
 ) -> int:
     """
     Ingest a .docx/.doc file into the target collection.
@@ -344,9 +355,13 @@ def ingest_file(
     try:
         chunks = build_doc_chunks(
             path,
+            chunker_type=chunker_type,
             chunk_size=chunk_size,
             overlap_size=overlap_size,
             encoding_name=encoding_name,
+            semantic_model_name=semantic_model_name,
+            semantic_breakpoint_percentile=semantic_breakpoint_percentile,
+            semantic_repair_sentence_boundaries=semantic_repair_sentence_boundaries,
         )
     except Exception as exc:
         logger.warning("Skipped %s: %s", path.name, exc)
