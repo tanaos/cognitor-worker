@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
+from typing import Literal, Optional
 
 
 class Config(BaseSettings):
@@ -14,6 +14,10 @@ class Config(BaseSettings):
     DEFAULT_CHUNK_SIZE: int = 500
     DEFAULT_OVERLAP_RATIO: float = 0.15
     DEFAULT_ENCODING_NAME: str = "cl100k_base"
+    CHUNKER_TYPE: Literal["semantic", "simple"] = "semantic"
+    SEMANTIC_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
+    SEMANTIC_BREAKPOINT_PERCENTILE: int = 70
+    SEMANTIC_REPAIR_SENTENCE_BOUNDARIES: bool = True
     
     # Other settings
     SYNC_INTERVAL_SECONDS: int = 300

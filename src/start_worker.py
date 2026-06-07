@@ -237,9 +237,13 @@ def _ingest_doc_file(
     file_signature: str,
     ingestion_service: Any,
     *,
+    chunker_type: str,
     chunk_size: int,
     overlap_ratio: float,
     encoding_name: str,
+    semantic_model_name: str,
+    semantic_breakpoint_percentile: int,
+    semantic_repair_sentence_boundaries: bool,
 ) -> None:
     """
     Ingest a document file into the specified collection.
@@ -264,9 +268,13 @@ def _ingest_doc_file(
         collection,
         path,
         file_signature,
+        chunker_type=chunker_type,
         chunk_size=chunk_size,
         overlap_size=overlap_size,
         encoding_name=encoding_name,
+        semantic_model_name=semantic_model_name,
+        semantic_breakpoint_percentile=semantic_breakpoint_percentile,
+        semantic_repair_sentence_boundaries=semantic_repair_sentence_boundaries,
     )
 
 
@@ -299,9 +307,13 @@ def sync_once(
     md_connector: ModuleType,
     html_connector: ModuleType,
     *,
+    chunker_type: str,
     chunk_size: int,
     overlap_ratio: float,
     encoding_name: str,
+    semantic_model_name: str,
+    semantic_breakpoint_percentile: int,
+    semantic_repair_sentence_boundaries: bool,
 ) -> None:
     """
     Perform a single synchronization pass between the local folder and the Cognitor collection.
@@ -363,9 +375,13 @@ def sync_once(
                     md_connector,
                     html_connector,
                 ),
+                chunker_type=chunker_type,
                 chunk_size=chunk_size,
                 overlap_ratio=overlap_ratio,
                 encoding_name=encoding_name,
+                semantic_model_name=semantic_model_name,
+                semantic_breakpoint_percentile=semantic_breakpoint_percentile,
+                semantic_repair_sentence_boundaries=semantic_repair_sentence_boundaries,
             )
             added_or_updated += 1
             continue
@@ -395,9 +411,13 @@ def sync_once(
                     md_connector,
                     html_connector,
                 ),
+                chunker_type=chunker_type,
                 chunk_size=chunk_size,
                 overlap_ratio=overlap_ratio,
                 encoding_name=encoding_name,
+                semantic_model_name=semantic_model_name,
+                semantic_breakpoint_percentile=semantic_breakpoint_percentile,
+                semantic_repair_sentence_boundaries=semantic_repair_sentence_boundaries,
             )
             added_or_updated += 1
 
@@ -461,9 +481,13 @@ def run_worker() -> None:
             pdf_connector,
             md_connector,
             html_connector,
+            chunker_type=config.CHUNKER_TYPE,
             chunk_size=config.DEFAULT_CHUNK_SIZE,
             overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
             encoding_name=config.DEFAULT_ENCODING_NAME,
+            semantic_model_name=config.SEMANTIC_MODEL_NAME,
+            semantic_breakpoint_percentile=config.SEMANTIC_BREAKPOINT_PERCENTILE,
+            semantic_repair_sentence_boundaries=config.SEMANTIC_REPAIR_SENTENCE_BOUNDARIES,
         )
 
         while not stop_event.wait(config.SYNC_INTERVAL_SECONDS):
@@ -476,9 +500,13 @@ def run_worker() -> None:
                     pdf_connector,
                     md_connector,
                     html_connector,
+                    chunker_type=config.CHUNKER_TYPE,
                     chunk_size=config.DEFAULT_CHUNK_SIZE,
                     overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
                     encoding_name=config.DEFAULT_ENCODING_NAME,
+                    semantic_model_name=config.SEMANTIC_MODEL_NAME,
+                    semantic_breakpoint_percentile=config.SEMANTIC_BREAKPOINT_PERCENTILE,
+                    semantic_repair_sentence_boundaries=config.SEMANTIC_REPAIR_SENTENCE_BOUNDARIES,
                 )
             except Exception as exc:
                 logger.error("Sync pass failed: %s", exc)

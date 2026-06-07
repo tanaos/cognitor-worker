@@ -39,5 +39,14 @@ COGNITOR_COLLECTION_NAME=my-collection
 # Optional
 COGNITOR_API_KEY=              # Cognitor API key, if your instance requires authentication
 SYNC_INTERVAL_SECONDS=600      # Polling interval for synchronization (default: 300 seconds)
+
+# Chunking
+CHUNKER_TYPE=semantic           # semantic (default) or simple
+DEFAULT_CHUNK_SIZE=500          # used by simple chunker
+DEFAULT_OVERLAP_RATIO=0.15      # used by simple chunker
+DEFAULT_ENCODING_NAME=cl100k_base  # used by simple chunker
+SEMANTIC_MODEL_NAME=sentence-transformers/all-MiniLM-L6-v2
+SEMANTIC_BREAKPOINT_PERCENTILE=70
+SEMANTIC_REPAIR_SENTENCE_BOUNDARIES=true
 ```
 
