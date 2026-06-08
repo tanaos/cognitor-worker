@@ -3,6 +3,7 @@ import logging
 import math
 import signal
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -15,6 +16,31 @@ from utils.logging import setup_logging
 setup_logging()
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _RemoteDocLite:
+    id: str
+    metadata: dict[str, Any]
+
+
+def _to_remote_doc_lite(raw: Any) -> _RemoteDocLite | None:
+    """
+    Normalize SDK objects / JSON dicts to a minimal shape used by sync logic.
+    """
+    if isinstance(raw, dict):
+        doc_id = raw.get("id")
+        metadata = raw.get("metadata")
+    else:
+        doc_id = getattr(raw, "id", None)
+        metadata = getattr(raw, "metadata", None)
+
+    if not isinstance(doc_id, str) or not doc_id:
+        return None
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    return _RemoteDocLite(id=doc_id, metadata=metadata)
 
 
 def _load_doc_connector() -> ModuleType:
@@ -110,7 +136,7 @@ def _build_file_signature(path: Path) -> str:
     return f"{stat.st_size}:{stat.st_mtime_ns}"
 
 
-def _iter_all_documents(client: Cognitor, collection: str) -> list[Any]:
+def _iter_all_documents(client: Cognitor, collection: str) -> list[_RemoteDocLite]:
     """
     Retrieve all documents from the specified collection, handling pagination.
     
@@ -121,21 +147,29 @@ def _iter_all_documents(client: Cognitor, collection: str) -> list[Any]:
         A list of all documents in the collection.
     """
     
-    docs: list[Any] = []
+    docs: list[_RemoteDocLite] = []
     offset = 0
     page_size = 200
 
     while True:
-        result = client.list_documents(collection, offset=offset, limit=page_size)
-        docs.extend(result.documents)
-        offset += len(result.documents)
-        if offset >= result.total or not result.documents:
+        result = client.list_documents(
+            collection,
+            offset=offset,
+            limit=page_size,
+        )
+        page_raw = result.documents
+        total = result.total
+
+        page_docs = [doc for doc in (_to_remote_doc_lite(raw) for raw in page_raw) if doc is not None]
+        docs.extend(page_docs)
+        offset += len(page_docs)
+        if offset >= total or not page_docs:
             break
 
     return docs
 
 
-def _group_docs_by_source_path(documents: list[Any]) -> dict[str, list[Any]]:
+def _group_docs_by_source_path(documents: list[_RemoteDocLite]) -> dict[str, list[_RemoteDocLite]]:
     """
     Group documents by their source path.
 
@@ -145,7 +179,7 @@ def _group_docs_by_source_path(documents: list[Any]) -> dict[str, list[Any]]:
         A dictionary mapping source paths to lists of documents.
     """
     
-    grouped: dict[str, list[Any]] = {}
+    grouped: dict[str, list[_RemoteDocLite]] = {}
     for doc in documents:
         metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
         source_path = metadata.get("source_path")
