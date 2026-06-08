@@ -25,6 +25,15 @@ class SemanticChunker:
         self.repair_sentence_boundaries = repair_sentence_boundaries
 
     def chunk(self, texts: Iterable[str]) -> list[BaseNode]:
+        """
+        Chunk the input texts using semantic splitting.
+        
+        Args:
+            texts: An iterable of input texts to be chunked.
+        Returns:
+            A list of BaseNode objects representing the chunked text.
+        """
+        
         documents = self._build_documents(texts)
 
         embed_model = HuggingFaceEmbedding(
@@ -46,6 +55,16 @@ class SemanticChunker:
         return nodes
 
     def chunk_paragraphs(self, paragraphs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Chunk the input paragraphs using semantic splitting.
+        
+        Args:
+            paragraphs: A list of dictionaries, each containing 'text', 'paragraph_num', and 
+            'page_num'.
+        Returns:
+            A list of dictionaries containing chunked text and associated metadata.
+        """
+        
         if not paragraphs:
             return []
 
@@ -75,10 +94,16 @@ class SemanticChunker:
 
         return chunks
 
-    def _build_documents(
-        self,
-        texts: Iterable[str],
-    ) -> list[Document]:
+    def _build_documents(self, texts: Iterable[str]) -> list[Document]:
+        """
+        Build Document objects from input texts.
+        
+        Args:
+            texts: An iterable of input texts to be converted into Document objects.
+        Returns:
+            A list of Document objects with text and metadata.
+        """
+        
         return [
             Document(
                 text=text,
@@ -87,10 +112,16 @@ class SemanticChunker:
             for index, text in enumerate(texts)
         ]
 
-    def _split_into_sentences(
-        self,
-        text: str,
-    ) -> list[str]:
+    def _split_into_sentences(self, text: str) -> list[str]:
+        """
+        Split the input text into sentences using punctuation as delimiters.
+        
+        Args:
+            text: The input text to be split into sentences.
+        Returns:
+            A list of sentences extracted from the input text.
+        """
+        
         normalized_text = re.sub(r"\s+", " ", text).strip()
 
         if not normalized_text:
@@ -107,10 +138,17 @@ class SemanticChunker:
             if sentence.strip()
         ]
 
-    def _repair_sentence_boundaries(
-        self,
-        nodes: list[BaseNode],
-    ) -> list[BaseNode]:
+    def _repair_sentence_boundaries(self, nodes: list[BaseNode]) -> list[BaseNode]:
+        """
+        Repair sentence boundaries in the chunked nodes to ensure that sentences are not
+        split across chunks.
+        
+        Args:
+            nodes: A list of BaseNode objects representing the chunked text.
+        Returns:
+            A list of BaseNode objects with repaired sentence boundaries.
+        """
+        
         repaired_nodes: list[BaseNode] = []
         buffer = ""
 
@@ -148,7 +186,7 @@ class SemanticChunker:
             if not complete_text:
                 continue
 
-            node.text = complete_text
+            node.set_content(complete_text)
             repaired_nodes.append(node)
 
         self._append_buffer(
@@ -166,21 +204,30 @@ class SemanticChunker:
         original_nodes: list[BaseNode],
         buffer: str,
     ) -> None:
+        """
+        Append any remaining buffer text to the last repaired node or the first original node.
+        
+        Args:
+            repaired_nodes: A list of BaseNode objects that have been repaired.
+            original_nodes: The original list of BaseNode objects before repair.
+            buffer: The remaining text buffer that needs to be appended.
+        """
+        
         if not buffer:
             return
 
         if repaired_nodes:
-            repaired_nodes[-1].text = (
+            repaired_nodes[-1].set_content(
                 repaired_nodes[-1]
                 .get_content()
                 .rstrip()
                 + " "
                 + buffer
-            ).strip()
+            )
             return
 
         if not original_nodes:
             return
 
-        original_nodes[0].text = buffer
+        original_nodes[0].set_content(buffer)
         repaired_nodes.append(original_nodes[0])

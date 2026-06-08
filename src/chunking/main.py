@@ -18,6 +18,28 @@ def build_chunks_from_paragraphs(
     semantic_breakpoint_percentile: int = 70,
     semantic_repair_sentence_boundaries: bool = True,
 ) -> list[dict[str, Any]]:
+    """
+    Build text chunks from a list of paragraphs.
+    
+    Args:
+        paragraphs: A list of dictionaries, each containing 'text', 'paragraph_num', and
+            'page_num'.
+        chunker_type: The type of chunker to use ('semantic' or 'simple').
+        chunk_size: The desired size of each chunk (applicable for simple chunker).
+        overlap_size: The number of overlapping characters between chunks (applicable for simple 
+            chunker).
+        encoding_name: The name of the encoding to use for token counting (applicable for simple 
+            chunker).
+        semantic_model_name: The name of the model to use for semantic chunking (applicable for 
+            semantic chunker).
+        semantic_breakpoint_percentile: The percentile threshold for determining breakpoints in 
+            semantic chunking (applicable for semantic chunker).
+        semantic_repair_sentence_boundaries: Whether to attempt to repair sentence boundaries 
+            in semantic chunking (applicable for semantic chunker).
+    Returns:
+        A list of dictionaries containing chunked text and associated metadata.
+    """
+    
     if not paragraphs:
         return []
 
