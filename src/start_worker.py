@@ -527,25 +527,7 @@ def run_worker() -> None:
     with Cognitor(config.COGNITOR_URL, api_key=config.COGNITOR_API_KEY) as client:
         _wait_for_cognitor_ready(client, stop_event)
 
-        sync_once(
-            client,
-            config.COGNITOR_COLLECTION_NAME,
-            docs_folder,
-            doc_connector,
-            pdf_connector,
-            md_connector,
-            html_connector,
-            msg_connector,
-            chunker_type=config.CHUNKER_TYPE,
-            chunk_size=config.DEFAULT_CHUNK_SIZE,
-            overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
-            encoding_name=config.DEFAULT_ENCODING_NAME,
-            semantic_model_name=config.SEMANTIC_MODEL_NAME,
-            semantic_breakpoint_percentile=config.SEMANTIC_BREAKPOINT_PERCENTILE,
-            semantic_repair_sentence_boundaries=config.SEMANTIC_REPAIR_SENTENCE_BOUNDARIES,
-        )
-
-        while not stop_event.wait(config.SYNC_INTERVAL_SECONDS):
+        def _run_sync_pass_safely() -> None:
             try:
                 sync_once(
                     client,
@@ -566,6 +548,11 @@ def run_worker() -> None:
                 )
             except Exception as exc:
                 logger.error("Sync pass failed: %s", exc)
+
+        _run_sync_pass_safely()
+
+        while not stop_event.wait(config.SYNC_INTERVAL_SECONDS):
+            _run_sync_pass_safely()
 
 def main() -> None:
     try:
