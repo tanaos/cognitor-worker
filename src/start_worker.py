@@ -99,6 +99,20 @@ def _load_html_connector() -> ModuleType:
     return module
 
 
+def _load_msg_connector() -> ModuleType:
+    """
+    Dynamically load the MSG connector module from src/msg-connector/main.py.
+    """
+
+    connector_path = Path(__file__).parent / "msg-connector" / "main.py"
+    spec = importlib.util.spec_from_file_location("msg_connector_main", connector_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load MSG connector module at {connector_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_config() -> Config:
     """
     Load runtime configuration and convert missing settings into a direct startup error.
@@ -318,6 +332,7 @@ def _ingestion_service_for_path(
     pdf_connector: ModuleType,
     md_connector: ModuleType,
     html_connector: ModuleType,
+    msg_connector: ModuleType,
 ) -> Any:
     """
     Select the ingestion service that owns the given file type.
@@ -329,6 +344,8 @@ def _ingestion_service_for_path(
         return md_connector
     if path.suffix.lower() in {".html", ".htm"}:
         return html_connector
+    if path.suffix.lower() == ".msg":
+        return msg_connector
     return doc_connector
 
 
@@ -340,6 +357,7 @@ def sync_once(
     pdf_connector: ModuleType,
     md_connector: ModuleType,
     html_connector: ModuleType,
+    msg_connector: ModuleType,
     *,
     chunker_type: str,
     chunk_size: int,
@@ -360,6 +378,7 @@ def sync_once(
         pdf_connector: The .pdf connector module.
         md_connector: The .md connector module.
         html_connector: The .html/.htm connector module.
+        msg_connector: The .msg connector module.
         chunk_size: The chunk size to use during ingestion.
         overlap_ratio: The overlap ratio used to compute token overlap.
         encoding_name: The token encoding to use.
@@ -367,13 +386,11 @@ def sync_once(
     
     _ensure_collection(client, collection)
 
+    supported_suffixes = {".docx", ".doc", ".pdf", ".md", ".html", ".htm", ".msg"}
     local_files = sorted(
-        list(docs_folder.rglob("*.docx"))
-        + list(docs_folder.rglob("*.doc"))
-        + list(docs_folder.rglob("*.pdf"))
-        + list(docs_folder.rglob("*.md"))
-        + list(docs_folder.rglob("*.html"))
-        + list(docs_folder.rglob("*.htm"))
+        path
+        for path in docs_folder.rglob("*")
+        if path.is_file() and path.suffix.lower() in supported_suffixes
     )
     local_map = {str(path.resolve()): path for path in local_files}
 
@@ -408,6 +425,7 @@ def sync_once(
                     pdf_connector,
                     md_connector,
                     html_connector,
+                    msg_connector,
                 ),
                 chunker_type=chunker_type,
                 chunk_size=chunk_size,
@@ -444,6 +462,7 @@ def sync_once(
                     pdf_connector,
                     md_connector,
                     html_connector,
+                    msg_connector,
                 ),
                 chunker_type=chunker_type,
                 chunk_size=chunk_size,
@@ -487,6 +506,7 @@ def run_worker() -> None:
     pdf_connector = _load_pdf_connector()
     md_connector = _load_md_connector()
     html_connector = _load_html_connector()
+    msg_connector = _load_msg_connector()
     stop_event = threading.Event()
 
     def _handle_shutdown(signum: int, _frame: Any) -> None:
@@ -515,6 +535,7 @@ def run_worker() -> None:
             pdf_connector,
             md_connector,
             html_connector,
+            msg_connector,
             chunker_type=config.CHUNKER_TYPE,
             chunk_size=config.DEFAULT_CHUNK_SIZE,
             overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
@@ -534,6 +555,7 @@ def run_worker() -> None:
                     pdf_connector,
                     md_connector,
                     html_connector,
+                    msg_connector,
                     chunker_type=config.CHUNKER_TYPE,
                     chunk_size=config.DEFAULT_CHUNK_SIZE,
                     overlap_ratio=config.DEFAULT_OVERLAP_RATIO,

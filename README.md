@@ -6,6 +6,7 @@ This worker keeps a local folder synchronized with a Cognitor collection, by per
 - .pdf
 - .md
 - .html and .htm
+- .msg
 
 ## Behavior
 
