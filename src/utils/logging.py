@@ -5,6 +5,28 @@ from typing import Any, Dict
 
 
 LOG_FILE_PATH = Path("logs") / "cognitor-worker.log"
+HTTP_LOGGER_PREFIXES = (
+    "httpx",
+    "httpcore",
+    "urllib3",
+    "aiohttp",
+)
+
+
+class HttpInfoToDebugFilter(logging.Filter):
+    """
+    Remap HTTP client INFO records to DEBUG so they are hidden at default INFO level.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno != logging.INFO:
+            return True
+
+        if any(record.name.startswith(prefix) for prefix in HTTP_LOGGER_PREFIXES):
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+
+        return True
 
 
 class ConditionalFormatter(logging.Formatter):
@@ -39,6 +61,11 @@ class ConditionalFormatter(logging.Formatter):
 LOGGING_CONFIG: Dict[str, Any] = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "http_info_to_debug": {
+            "()": HttpInfoToDebugFilter,
+        }
+    },
     "formatters": {
         "default": {
             "()": ConditionalFormatter,
@@ -51,6 +78,7 @@ LOGGING_CONFIG: Dict[str, Any] = {
             "class": "logging.StreamHandler",
             "stream": "ext://sys.stdout",
             "level": "INFO",
+            "filters": ["http_info_to_debug"],
         },
         "file": {
             "formatter": "default",
@@ -59,6 +87,7 @@ LOGGING_CONFIG: Dict[str, Any] = {
             "mode": "a",
             "encoding": "utf-8",
             "level": "INFO",
+            "filters": ["http_info_to_debug"],
         },
     },
     "root": {"handlers": ["console", "file"], "level": "INFO"},
