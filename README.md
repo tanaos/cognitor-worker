@@ -4,6 +4,8 @@
     </a>
 </p>
 
+# Cognitor Worker
+
 This worker automatically chunks, embeds and indexes the entire content of a target folder (and its subfolders) into a [Cognitor](https://github.com/tanaos/cognitor) collection, making it easily searchable by both AI agents and humans. The folder's content is continuously monitored for changes, ensuring that the Cognitor collection remains up-to-date with the local files.
 
 The following types of files are currently supported (we will be adding more soon):

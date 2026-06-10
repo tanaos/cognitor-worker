@@ -23,6 +23,29 @@ class SemanticChunker:
         self.model_name = model_name
         self.breakpoint_percentile = breakpoint_percentile
         self.repair_sentence_boundaries = repair_sentence_boundaries
+        self._embed_model: HuggingFaceEmbedding | None = None
+        self._parser: SemanticSplitterNodeParser | None = None
+
+    def _get_parser(self) -> SemanticSplitterNodeParser:
+        """
+        Build and cache the semantic parser so model loading happens once per chunker instance.
+        """
+
+        if self._parser is not None:
+            return self._parser
+
+        self._embed_model = HuggingFaceEmbedding(
+            model_name=self.model_name,
+        )
+
+        self._parser = SemanticSplitterNodeParser(
+            embed_model=self._embed_model,
+            breakpoint_percentile_threshold=self.breakpoint_percentile,
+            include_metadata=True,
+            include_prev_next_rel=True,
+        )
+
+        return self._parser
 
     def chunk(self, texts: Iterable[str]) -> list[BaseNode]:
         """
@@ -36,17 +59,7 @@ class SemanticChunker:
         
         documents = self._build_documents(texts)
 
-        embed_model = HuggingFaceEmbedding(
-            model_name=self.model_name,
-        )
-
-        parser = SemanticSplitterNodeParser(
-            embed_model=embed_model,
-            breakpoint_percentile_threshold=self.breakpoint_percentile,
-            include_metadata=True,
-            include_prev_next_rel=True,
-        )
-
+        parser = self._get_parser()
         nodes = parser.get_nodes_from_documents(documents)
 
         if self.repair_sentence_boundaries:

@@ -15,17 +15,14 @@ HTTP_LOGGER_PREFIXES = (
 
 class HttpInfoToDebugFilter(logging.Filter):
     """
-    Remap HTTP client INFO records to DEBUG so they are hidden at default INFO level.
+    Suppress HTTP client INFO records so default INFO logs stay clean.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno != logging.INFO:
-            return True
-
-        if any(record.name.startswith(prefix) for prefix in HTTP_LOGGER_PREFIXES):
-            record.levelno = logging.DEBUG
-            record.levelname = "DEBUG"
-
+        if record.levelno == logging.INFO and any(
+            record.name.startswith(prefix) for prefix in HTTP_LOGGER_PREFIXES
+        ):
+            return False
         return True
 
 

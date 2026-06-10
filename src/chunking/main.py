@@ -7,6 +7,32 @@ from chunking.simple.main import SimpleChunker
 ChunkerType = Literal["semantic", "simple"]
 
 
+_SEMANTIC_CHUNKER_CACHE: dict[tuple[str, int, bool], SemanticChunker] = {}
+
+
+def _get_semantic_chunker(
+    *,
+    semantic_model_name: str,
+    semantic_breakpoint_percentile: int,
+    semantic_repair_sentence_boundaries: bool,
+) -> SemanticChunker:
+    cache_key = (
+        semantic_model_name,
+        semantic_breakpoint_percentile,
+        semantic_repair_sentence_boundaries,
+    )
+    chunker = _SEMANTIC_CHUNKER_CACHE.get(cache_key)
+    if chunker is None:
+        chunker = SemanticChunker(
+            model_name=semantic_model_name,
+            breakpoint_percentile=semantic_breakpoint_percentile,
+            repair_sentence_boundaries=semantic_repair_sentence_boundaries,
+        )
+        _SEMANTIC_CHUNKER_CACHE[cache_key] = chunker
+
+    return chunker
+
+
 def build_chunks_from_paragraphs(
     paragraphs: list[dict[str, Any]],
     *,
@@ -54,10 +80,10 @@ def build_chunks_from_paragraphs(
         return chunker.chunk_paragraphs(paragraphs)
 
     if normalized_chunker_type == "semantic":
-        chunker = SemanticChunker(
-            model_name=semantic_model_name,
-            breakpoint_percentile=semantic_breakpoint_percentile,
-            repair_sentence_boundaries=semantic_repair_sentence_boundaries,
+        chunker = _get_semantic_chunker(
+            semantic_model_name=semantic_model_name,
+            semantic_breakpoint_percentile=semantic_breakpoint_percentile,
+            semantic_repair_sentence_boundaries=semantic_repair_sentence_boundaries,
         )
         return chunker.chunk_paragraphs(paragraphs)
 

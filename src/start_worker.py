@@ -359,15 +359,22 @@ def _warm_up_semantic_chunker(
     Ensure semantic model weights are available before the first sync pass.
     """
 
-    from chunking.semantic.main import SemanticChunker
+    from chunking.main import build_chunks_from_paragraphs
 
     logger.info("Warming up semantic chunker model: %s", semantic_model_name)
-    chunker = SemanticChunker(
-        model_name=semantic_model_name,
-        breakpoint_percentile=semantic_breakpoint_percentile,
-        repair_sentence_boundaries=semantic_repair_sentence_boundaries,
+    build_chunks_from_paragraphs(
+        [
+            {
+                "text": "Semantic chunker warm-up sentence.",
+                "paragraph_num": 1,
+                "page_num": 1,
+            }
+        ],
+        chunker_type="semantic",
+        semantic_model_name=semantic_model_name,
+        semantic_breakpoint_percentile=semantic_breakpoint_percentile,
+        semantic_repair_sentence_boundaries=semantic_repair_sentence_boundaries,
     )
-    chunker.chunk(["Semantic chunker warm-up sentence."])
     logger.info("Semantic chunker model warm-up complete")
 
 
