@@ -7,6 +7,7 @@ class Config(BaseSettings):
     # Cognitor configuration
     COGNITOR_URL: str
     COGNITOR_API_KEY: Optional[str] = None
+    COGNITOR_TIMEOUT_SECONDS: float = 300.0
     DOCS_FOLDER: str
     COGNITOR_COLLECTION_NAME: str = "cognitor-worker-collection"
     

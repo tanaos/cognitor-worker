@@ -39,6 +39,7 @@ COGNITOR_COLLECTION_NAME=my-collection
 
 # Optional
 COGNITOR_API_KEY=              # Cognitor API key, if your instance requires authentication
+COGNITOR_TIMEOUT_SECONDS=300   # HTTP timeout for Cognitor API calls
 SYNC_INTERVAL_SECONDS=600      # Polling interval for synchronization (default: 300 seconds)
 
 # Chunking

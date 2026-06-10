@@ -349,6 +349,28 @@ def _ingestion_service_for_path(
     return doc_connector
 
 
+def _warm_up_semantic_chunker(
+    *,
+    semantic_model_name: str,
+    semantic_breakpoint_percentile: int,
+    semantic_repair_sentence_boundaries: bool,
+) -> None:
+    """
+    Ensure semantic model weights are available before the first sync pass.
+    """
+
+    from chunking.semantic.main import SemanticChunker
+
+    logger.info("Warming up semantic chunker model: %s", semantic_model_name)
+    chunker = SemanticChunker(
+        model_name=semantic_model_name,
+        breakpoint_percentile=semantic_breakpoint_percentile,
+        repair_sentence_boundaries=semantic_repair_sentence_boundaries,
+    )
+    chunker.chunk(["Semantic chunker warm-up sentence."])
+    logger.info("Semantic chunker model warm-up complete")
+
+
 def sync_once(
     client: Cognitor,
     collection: str,
@@ -502,6 +524,9 @@ def run_worker() -> None:
     if not docs_folder.is_dir():
         raise NotADirectoryError(f"Configured folder is not a directory: {docs_folder}")
 
+    if config.COGNITOR_TIMEOUT_SECONDS <= 0:
+        raise ValueError("COGNITOR_TIMEOUT_SECONDS must be greater than 0")
+
     doc_connector = _load_doc_connector()
     pdf_connector = _load_pdf_connector()
     md_connector = _load_md_connector()
@@ -524,8 +549,19 @@ def run_worker() -> None:
         config.SYNC_INTERVAL_SECONDS,
     )
 
-    with Cognitor(config.COGNITOR_URL, api_key=config.COGNITOR_API_KEY) as client:
+    with Cognitor(
+        config.COGNITOR_URL,
+        api_key=config.COGNITOR_API_KEY,
+        timeout=config.COGNITOR_TIMEOUT_SECONDS,
+    ) as client:
         _wait_for_cognitor_ready(client, stop_event)
+
+        if config.CHUNKER_TYPE.strip().lower() == "semantic":
+            _warm_up_semantic_chunker(
+                semantic_model_name=config.SEMANTIC_MODEL_NAME,
+                semantic_breakpoint_percentile=config.SEMANTIC_BREAKPOINT_PERCENTILE,
+                semantic_repair_sentence_boundaries=config.SEMANTIC_REPAIR_SENTENCE_BOUNDARIES,
+            )
 
         def _run_sync_pass_safely() -> None:
             try:
