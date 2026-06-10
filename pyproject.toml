@@ -14,7 +14,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pypdf>=6.0.0",
     "tiktoken>=0.13.0",
-    "llama_index",
+    "llama-index-core",
     "llama-index-embeddings-huggingface",
     "sentence-transformers>=5.5.1",
 ]
