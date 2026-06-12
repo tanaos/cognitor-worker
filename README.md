@@ -60,6 +60,7 @@ Optionally, you can also set:
 COGNITOR_API_KEY=              # Cognitor API key, if your instance requires authentication
 COGNITOR_TIMEOUT_SECONDS=300   # HTTP timeout for Cognitor API calls
 SYNC_INTERVAL_SECONDS=600      # Polling interval for synchronization (default: 300 seconds)
+WORKER_LOG_LEVEL=info          # Worker log level (debug, info, warning, error, critical)
 
 # Chunking
 CHUNKER_TYPE=semantic           # semantic (default) or simple

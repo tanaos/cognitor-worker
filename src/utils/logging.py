@@ -3,6 +3,8 @@ import logging.config
 from pathlib import Path
 from typing import Any, Dict
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 LOG_FILE_PATH = Path("logs") / "cognitor-worker.log"
 HTTP_LOGGER_PREFIXES = (
@@ -12,13 +14,33 @@ HTTP_LOGGER_PREFIXES = (
     "aiohttp",
 )
 
+_HTTP_INFO_ENABLED = False
+
+
+class LoggingSettings(BaseSettings):
+    WORKER_LOG_LEVEL: str = "INFO"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="",
+        extra="ignore",
+    )
+
+
+def _resolve_log_level() -> int:
+    level_name = LoggingSettings().WORKER_LOG_LEVEL.strip().upper()
+    return getattr(logging, level_name, logging.INFO)
+
 
 class HttpInfoToDebugFilter(logging.Filter):
     """
-    Suppress HTTP client INFO records so default INFO logs stay clean.
+    Suppress HTTP client INFO records unless the worker runs at DEBUG.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if _HTTP_INFO_ENABLED:
+            return True
+
         if record.levelno == logging.INFO and any(
             record.name.startswith(prefix) for prefix in HTTP_LOGGER_PREFIXES
         ):
@@ -55,55 +77,60 @@ class ConditionalFormatter(logging.Formatter):
 
         return f"{self.formatTime(record)} | [{record.levelname}]{tag_segment} | {record.getMessage()}"
 
-LOGGING_CONFIG: Dict[str, Any] = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "filters": {
-        "http_info_to_debug": {
-            "()": HttpInfoToDebugFilter,
-        }
-    },
-    "formatters": {
-        "default": {
-            "()": ConditionalFormatter,
-            "datefmt": "%Y-%m-%d %H:%M:%S",
-        }
-    },
-    "handlers": {
+
+def _build_logging_config(log_level: int, include_file_handler: bool) -> Dict[str, Any]:
+    handlers: Dict[str, Any] = {
         "console": {
             "formatter": "default",
             "class": "logging.StreamHandler",
             "stream": "ext://sys.stdout",
-            "level": "INFO",
+            "level": log_level,
             "filters": ["http_info_to_debug"],
         },
-        "file": {
+    }
+
+    if include_file_handler:
+        handlers["file"] = {
             "formatter": "default",
             "class": "logging.FileHandler",
             "filename": str(LOG_FILE_PATH),
             "mode": "a",
             "encoding": "utf-8",
-            "level": "INFO",
+            "level": log_level,
             "filters": ["http_info_to_debug"],
-        },
-    },
-    "root": {"handlers": ["console", "file"], "level": "INFO"},
-}
+        }
 
-CONSOLE_ONLY_LOGGING_CONFIG: Dict[str, Any] = {
-    **LOGGING_CONFIG,
-    "handlers": {
-        "console": LOGGING_CONFIG["handlers"]["console"],
-    },
-    "root": {"handlers": ["console"], "level": "INFO"},
-}
+    root_handlers = ["console"] + (["file"] if include_file_handler else [])
+
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "filters": {
+            "http_info_to_debug": {
+                "()": HttpInfoToDebugFilter,
+            }
+        },
+        "formatters": {
+            "default": {
+                "()": ConditionalFormatter,
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            }
+        },
+        "handlers": handlers,
+        "root": {"handlers": root_handlers, "level": log_level},
+    }
 
 def setup_logging() -> None:
+    global _HTTP_INFO_ENABLED
+
+    log_level = _resolve_log_level()
+    _HTTP_INFO_ENABLED = log_level <= logging.DEBUG
+
     LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
-        logging.config.dictConfig(LOGGING_CONFIG)
+        logging.config.dictConfig(_build_logging_config(log_level, include_file_handler=True))
     except (OSError, PermissionError, ValueError):
-        logging.config.dictConfig(CONSOLE_ONLY_LOGGING_CONFIG)
+        logging.config.dictConfig(_build_logging_config(log_level, include_file_handler=False))
         logging.getLogger(__name__).warning(
             "File logging disabled because %s is not writable",
             LOG_FILE_PATH.resolve(),
