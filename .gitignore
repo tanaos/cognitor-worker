@@ -27,3 +27,6 @@ logs/
 
 # Docker cache
 .docker-cache/
+
+# Packaging
+.desktop_packaging/
