@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import logging
 import math
 import signal
@@ -6,7 +7,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Optional
 from cognitor import Cognitor, ConflictError, NotFoundError
 from pydantic import ValidationError
 from config.settings import Config
@@ -16,6 +17,40 @@ from utils.logging import setup_logging
 setup_logging()
 
 logger = logging.getLogger(__name__)
+
+
+def _load_worker_folder_from_shared_config() -> Optional[str]:
+    """
+    Load worker folder configuration from shared storage.
+    
+    Attempts to read from:
+    1. ../cognitor/storage/worker_config.json (if Docker volumes are shared)
+    2. ./storage/worker_config.json (local copy)
+    
+    Returns:
+        Folder path string, or None if not configured
+    """
+    # Try shared storage first (Docker compose volumes)
+    shared_paths = [
+        Path(__file__).parent.parent.parent / "cognitor" / "storage" / "worker_config.json",
+        Path("./storage/worker_config.json").resolve(),
+        Path("../cognitor/storage/worker_config.json").resolve(),
+    ]
+    
+    for config_path in shared_paths:
+        try:
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    folder_path = config.get("folder_path")
+                    if folder_path:
+                        return folder_path
+        except (json.JSONDecodeError, IOError, OSError):
+            # Continue to next path if this one fails
+            continue
+    
+    return None
+
 
 
 @dataclass
@@ -512,24 +547,58 @@ def sync_once(
     )
 
 
+def _get_docs_folder(config: Config) -> Path:
+    """
+    Get the documents folder path.
+    
+    Priority:
+    1. Configuration from shared storage (worker_config.json)
+    2. DOCS_FOLDER environment variable
+    
+    Args:
+        config: Worker configuration
+        
+    Returns:
+        Path to the documents folder
+    """
+    # Try to get from shared configuration first (backend sets this)
+    configured_folder = _load_worker_folder_from_shared_config()
+    
+    if configured_folder:
+        docs_folder = Path(configured_folder).expanduser().resolve()
+        logger.info("Using worker folder from shared configuration: %s", docs_folder)
+    elif config.DOCS_FOLDER:
+        docs_folder = Path(config.DOCS_FOLDER).expanduser().resolve()
+        logger.info("Using worker folder from DOCS_FOLDER environment variable: %s", docs_folder)
+    else:
+        raise ValueError("No folder configured. Set DOCS_FOLDER environment variable or configure via API.")
+    
+    if not docs_folder.exists():
+        raise FileNotFoundError(f"Configured folder does not exist: {docs_folder}")
+    if not docs_folder.is_dir():
+        raise NotADirectoryError(f"Configured folder is not a directory: {docs_folder}")
+    
+    return docs_folder
+
+
 def run_worker() -> None:
     """
     Run the Cognitor sync worker, which continuously synchronizes the local folder
     with the Cognitor collection at regular intervals.
+    
+    The worker supports dynamic folder configuration:
+    - Checks shared storage for folder path (via worker_config.json)
+    - Falls back to DOCS_FOLDER environment variable
+    - Periodically polls for configuration changes
     """
     
     config = _load_config()
     
     # Redundant check for type safety and to satisfy static analysis
-    assert config.DOCS_FOLDER is not None and \
-        config.COGNITOR_COLLECTION_NAME is not None and \
+    assert config.COGNITOR_COLLECTION_NAME is not None and \
         config.COGNITOR_URL is not None
 
-    docs_folder = Path(config.DOCS_FOLDER).expanduser().resolve()
-    if not docs_folder.exists():
-        raise FileNotFoundError(f"Configured folder does not exist: {docs_folder}")
-    if not docs_folder.is_dir():
-        raise NotADirectoryError(f"Configured folder is not a directory: {docs_folder}")
+    docs_folder = _get_docs_folder(config)
 
     if config.COGNITOR_TIMEOUT_SECONDS <= 0:
         raise ValueError("COGNITOR_TIMEOUT_SECONDS must be greater than 0")
@@ -571,7 +640,19 @@ def run_worker() -> None:
             )
 
         def _run_sync_pass_safely() -> None:
+            nonlocal docs_folder
             try:
+                # Check if folder configuration has changed (from shared storage)
+                configured_folder = _load_worker_folder_from_shared_config()
+                if configured_folder:
+                    new_folder = Path(configured_folder).expanduser().resolve()
+                    if new_folder != docs_folder:
+                        if new_folder.exists() and new_folder.is_dir():
+                            docs_folder = new_folder
+                            logger.info("Detected folder configuration change, switching to: %s", docs_folder)
+                        else:
+                            logger.warning("Configured folder is invalid, skipping update: %s", new_folder)
+                
                 sync_once(
                     client,
                     config.COGNITOR_COLLECTION_NAME,
