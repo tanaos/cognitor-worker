@@ -148,6 +148,20 @@ def _load_msg_connector() -> ModuleType:
     return module
 
 
+def _load_log_connector() -> ModuleType:
+    """
+    Dynamically load the log connector module from src/log-connector/main.py.
+    """
+
+    connector_path = Path(__file__).parent / "log-connector" / "main.py"
+    spec = importlib.util.spec_from_file_location("log_connector_main", connector_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load log connector module at {connector_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_config() -> Config:
     """
     Load runtime configuration and convert missing settings into a direct startup error.
@@ -368,6 +382,7 @@ def _ingestion_service_for_path(
     md_connector: ModuleType,
     html_connector: ModuleType,
     msg_connector: ModuleType,
+    log_connector: ModuleType,
 ) -> Any:
     """
     Select the ingestion service that owns the given file type.
@@ -381,6 +396,8 @@ def _ingestion_service_for_path(
         return html_connector
     if path.suffix.lower() == ".msg":
         return msg_connector
+    if path.suffix.lower() == ".log":
+        return log_connector
     return doc_connector
 
 
@@ -422,6 +439,7 @@ def sync_once(
     md_connector: ModuleType,
     html_connector: ModuleType,
     msg_connector: ModuleType,
+    log_connector: ModuleType,
     *,
     chunker_type: str,
     chunk_size: int,
@@ -443,6 +461,7 @@ def sync_once(
         md_connector: The .md connector module.
         html_connector: The .html/.htm connector module.
         msg_connector: The .msg connector module.
+        log_connector: The .log connector module.
         chunk_size: The chunk size to use during ingestion.
         overlap_ratio: The overlap ratio used to compute token overlap.
         encoding_name: The token encoding to use.
@@ -450,7 +469,7 @@ def sync_once(
     
     _ensure_collection(client, collection)
 
-    supported_suffixes = {".docx", ".doc", ".pdf", ".md", ".html", ".htm", ".msg"}
+    supported_suffixes = {".docx", ".doc", ".pdf", ".md", ".html", ".htm", ".msg", ".log"}
     local_files = sorted(
         path
         for path in docs_folder.rglob("*")
@@ -490,6 +509,7 @@ def sync_once(
                     md_connector,
                     html_connector,
                     msg_connector,
+                    log_connector,
                 ),
                 chunker_type=chunker_type,
                 chunk_size=chunk_size,
@@ -608,6 +628,7 @@ def run_worker() -> None:
     md_connector = _load_md_connector()
     html_connector = _load_html_connector()
     msg_connector = _load_msg_connector()
+    log_connector = _load_log_connector()
     stop_event = threading.Event()
 
     def _handle_shutdown(signum: int, _frame: Any) -> None:
@@ -662,6 +683,7 @@ def run_worker() -> None:
                     md_connector,
                     html_connector,
                     msg_connector,
+                    log_connector,
                     chunker_type=config.CHUNKER_TYPE,
                     chunk_size=config.DEFAULT_CHUNK_SIZE,
                     overlap_ratio=config.DEFAULT_OVERLAP_RATIO,
