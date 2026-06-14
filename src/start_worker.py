@@ -12,7 +12,10 @@ from cognitor import Cognitor, ConflictError, NotFoundError
 from pydantic import ValidationError
 from config.settings import Config
 from utils.logging import setup_logging
-from utils.worker_status import WorkerStatusManager
+from api.server import set_worker_state, router as worker_api_router
+
+import uvicorn
+from fastapi import FastAPI
 
 
 setup_logging()
@@ -605,13 +608,13 @@ def _get_docs_folder(config: Config) -> Path:
 
 def run_worker() -> None:
     """
-    Run the Cognitor sync worker, which continuously synchronizes the local folder
-    with the Cognitor collection at regular intervals.
+    Run the Cognitor sync worker with a REST API for coordination.
     
-    The worker supports dynamic folder configuration:
-    - Checks shared storage for folder path (via worker_config.json)
-    - Falls back to DOCS_FOLDER environment variable
-    - Periodically polls for configuration changes
+    Starts two main components:
+    1. A FastAPI server for REST API coordination
+    2. A sync loop that processes documents from the configured folder
+    
+    Both components communicate via thread-safe shared state.
     """
     
     config = _load_config()
@@ -631,7 +634,24 @@ def run_worker() -> None:
     html_connector = _load_html_connector()
     msg_connector = _load_msg_connector()
     log_connector = _load_log_connector()
+    
+    # Synchronization primitives
     stop_event = threading.Event()
+    sync_event = threading.Event()  # Signals when to perform a sync
+    status_lock = threading.Lock()
+    
+    # Shared state for API server
+    worker_state = {
+        "sync_event": sync_event,
+        "status_lock": status_lock,
+        "status": {
+            "indexing": False,
+            "error": None,
+        },
+        "folder_path": docs_folder,
+        "set_folder_callback": None,  # Will be set below
+        "clear_folder_callback": None,  # Will be set below
+    }
 
     def _handle_shutdown(signum: int, _frame: Any) -> None:
         logger.info("Received signal %s; shutting down worker...", signum)
@@ -641,12 +661,54 @@ def run_worker() -> None:
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
     logger.info(
-        "Starting Cognitor sync worker | folder=%s collection=%s url=%s interval=%ss",
+        "Starting Cognitor sync worker | folder=%s collection=%s url=%s interval=%ss api_port=%s",
         docs_folder,
         config.COGNITOR_COLLECTION_NAME,
         config.COGNITOR_URL,
         config.SYNC_INTERVAL_SECONDS,
+        config.WORKER_API_PORT,
     )
+
+    # Define folder management callbacks for the API
+    def _set_folder_callback(folder_path: str) -> None:
+        """Callback for API to request folder change."""
+        nonlocal docs_folder
+        if not folder_path or not folder_path.strip():
+            raise ValueError("Folder path cannot be empty")
+        if ".." in folder_path:
+            raise ValueError("Folder path cannot contain '..'")
+        
+        new_folder = Path(folder_path).expanduser().resolve()
+        if not new_folder.exists():
+            raise ValueError(f"Folder does not exist: {folder_path}")
+        if not new_folder.is_dir():
+            raise ValueError(f"Path is not a directory: {folder_path}")
+        
+        with status_lock:
+            docs_folder = new_folder
+            worker_state["folder_path"] = new_folder
+        
+        # Trigger immediate sync
+        sync_event.set()
+
+    def _clear_folder_callback() -> None:
+        """Callback for API to request folder clear."""
+        nonlocal docs_folder
+        with status_lock:
+            docs_folder = None
+            worker_state["folder_path"] = None
+
+    worker_state["set_folder_callback"] = _set_folder_callback
+    worker_state["clear_folder_callback"] = _clear_folder_callback
+    set_worker_state(worker_state)
+
+    # Start the API server in a separate thread
+    api_thread = threading.Thread(
+        target=_run_api_server,
+        args=(config, stop_event),
+        daemon=True,
+    )
+    api_thread.start()
 
     with Cognitor(
         config.COGNITOR_URL,
@@ -664,21 +726,19 @@ def run_worker() -> None:
 
         def _run_sync_pass_safely() -> None:
             nonlocal docs_folder
-            status_manager = WorkerStatusManager()
+            
             try:
-                # Check if folder configuration has changed (from shared storage)
-                configured_folder = _load_worker_folder_from_shared_config()
-                if configured_folder:
-                    new_folder = Path(configured_folder).expanduser().resolve()
-                    if new_folder != docs_folder:
-                        if new_folder.exists() and new_folder.is_dir():
-                            docs_folder = new_folder
-                            logger.info("Detected folder configuration change, switching to: %s", docs_folder)
-                        else:
-                            logger.warning("Configured folder is invalid, skipping update: %s", new_folder)
+                # Check if folder is configured
+                if not docs_folder:
+                    logger.debug("No folder configured, skipping sync")
+                    return
                 
-                # Mark sync as started
-                status_manager.start_sync()
+                # Update status to indexing
+                with status_lock:
+                    worker_state["status"]["indexing"] = True
+                    worker_state["status"]["error"] = None
+                
+                logger.info("Starting sync of folder: %s", docs_folder)
                 
                 sync_once(
                     client,
@@ -699,17 +759,62 @@ def run_worker() -> None:
                     semantic_repair_sentence_boundaries=config.SEMANTIC_REPAIR_SENTENCE_BOUNDARIES,
                 )
                 
-                # Mark sync as completed
-                status_manager.end_sync()
+                # Mark sync as completed successfully
+                with status_lock:
+                    worker_state["status"]["indexing"] = False
+                    worker_state["status"]["error"] = None
+                
+                logger.info("Sync completed successfully")
+                
             except Exception as exc:
                 logger.error("Sync pass failed: %s", exc)
-                # Mark sync as completed even on error
-                status_manager.end_sync()
+                # Report the error via API state
+                with status_lock:
+                    worker_state["status"]["indexing"] = False
+                    worker_state["status"]["error"] = str(exc)
 
+        # Initial sync if folder is configured
         _run_sync_pass_safely()
 
-        while not stop_event.wait(config.SYNC_INTERVAL_SECONDS):
-            _run_sync_pass_safely()
+        # Main event loop
+        while not stop_event.is_set():
+            # Wait for either the scheduled interval or an explicit sync request
+            if sync_event.wait(timeout=config.SYNC_INTERVAL_SECONDS):
+                # Sync was explicitly requested
+                sync_event.clear()
+                _run_sync_pass_safely()
+            else:
+                # Scheduled interval elapsed
+                _run_sync_pass_safely()
+    
+    # Wait for API thread to finish (won't happen until stop_event is set)
+    api_thread.join(timeout=5)
+    logger.info("Worker shutdown complete")
+
+
+def _run_api_server(config: Config, stop_event: threading.Event) -> None:
+    """
+    Run the FastAPI server in a separate thread.
+    
+    Args:
+        config: Worker configuration
+        stop_event: Event to signal shutdown
+    """
+    app = FastAPI(title="Cognitor Worker API")
+    app.include_router(worker_api_router)
+    
+    # Run uvicorn server (blocks until shutdown)
+    # We'll check stop_event in a separate mechanism
+    try:
+        uvicorn.run(
+            app,
+            host=config.WORKER_API_HOST,
+            port=config.WORKER_API_PORT,
+            log_level="warning",
+            access_log=False,
+        )
+    except Exception as e:
+        logger.error("API server error: %s", e)
 
 def main() -> None:
     try:

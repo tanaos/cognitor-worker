@@ -22,6 +22,10 @@ class Config(BaseSettings):
     
     # Other settings
     SYNC_INTERVAL_SECONDS: int = 300
+    
+    # Worker API settings
+    WORKER_API_HOST: str = "0.0.0.0"
+    WORKER_API_PORT: int = 7531
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -2,6 +2,7 @@
 
 ### Added
 
+- Expose a new REST API which enables `cognitor` to interact with `cognitor-worker` in a more efficient and natural way.
 - Add support for `cognitor` and `cognitor-worker` log level selection from `cognitor`'s `.env` file.
 - Added support for `.log` files ingestion.
 - Added support for ingestion status tracking
