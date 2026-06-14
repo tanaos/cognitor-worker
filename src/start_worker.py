@@ -12,6 +12,7 @@ from cognitor import Cognitor, ConflictError, NotFoundError
 from pydantic import ValidationError
 from config.settings import Config
 from utils.logging import setup_logging
+from utils.worker_status import WorkerStatusManager
 
 
 setup_logging()
@@ -547,6 +548,7 @@ def sync_once(
                     md_connector,
                     html_connector,
                     msg_connector,
+                    log_connector
                 ),
                 chunker_type=chunker_type,
                 chunk_size=chunk_size,
@@ -662,6 +664,7 @@ def run_worker() -> None:
 
         def _run_sync_pass_safely() -> None:
             nonlocal docs_folder
+            status_manager = WorkerStatusManager()
             try:
                 # Check if folder configuration has changed (from shared storage)
                 configured_folder = _load_worker_folder_from_shared_config()
@@ -673,6 +676,9 @@ def run_worker() -> None:
                             logger.info("Detected folder configuration change, switching to: %s", docs_folder)
                         else:
                             logger.warning("Configured folder is invalid, skipping update: %s", new_folder)
+                
+                # Mark sync as started
+                status_manager.start_sync()
                 
                 sync_once(
                     client,
@@ -692,8 +698,13 @@ def run_worker() -> None:
                     semantic_breakpoint_percentile=config.SEMANTIC_BREAKPOINT_PERCENTILE,
                     semantic_repair_sentence_boundaries=config.SEMANTIC_REPAIR_SENTENCE_BOUNDARIES,
                 )
+                
+                # Mark sync as completed
+                status_manager.end_sync()
             except Exception as exc:
                 logger.error("Sync pass failed: %s", exc)
+                # Mark sync as completed even on error
+                status_manager.end_sync()
 
         _run_sync_pass_safely()
 
