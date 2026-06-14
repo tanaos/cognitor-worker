@@ -7,6 +7,10 @@
 - Added support for `.log` files ingestion.
 - Added support for ingestion status tracking
 
+### Changed
+
+- Replaced stream-based ingestion with batch-based ingestion.
+
 ## Release v0.1.0 - June 10, 2026
 
 First release.
