@@ -8,6 +8,7 @@ import extract_msg
 from bs4 import BeautifulSoup
 
 from chunking import build_chunks_from_paragraphs
+from utils import batch_ingest_documents
 
 
 logger = logging.getLogger(__name__)
@@ -244,6 +245,4 @@ def ingest_file(
         for chunk in chunks
     ]
 
-    ids = client.bulk_add_documents(collection, texts, metadatas)
-    logger.info("%s: %s chunk(s) ingested", path.name, len(ids))
-    return len(ids)
+    return batch_ingest_documents(client, collection, texts, metadatas, path.name)
