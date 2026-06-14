@@ -7,7 +7,7 @@ from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 
 from chunking import build_chunks_from_paragraphs
-from utils import batch_ingest_documents
+from utils.ingestion import batch_ingest_documents
 
 
 logger = logging.getLogger(__name__)

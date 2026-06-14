@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from chunking import build_chunks_from_paragraphs
-from utils import batch_ingest_documents
+from utils.ingestion import batch_ingest_documents
 
 
 logger = logging.getLogger(__name__)

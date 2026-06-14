@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from bs4 import Tag
 
 from chunking import build_chunks_from_paragraphs
-from utils import batch_ingest_documents
+from utils.ingestion import batch_ingest_documents
 
 
 logger = logging.getLogger(__name__)

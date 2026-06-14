@@ -1,3 +1,7 @@
+"""
+Shared utilities for document ingestion.
+"""
+
 import logging
 from typing import Any
 

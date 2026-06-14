@@ -8,7 +8,7 @@ import extract_msg
 from bs4 import BeautifulSoup
 
 from chunking import build_chunks_from_paragraphs
-from utils import batch_ingest_documents
+from utils.ingestion import batch_ingest_documents
 
 
 logger = logging.getLogger(__name__)
