@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     image: cognitor-worker:latest
     container_name: cognitor-worker
+    network_mode: host
     environment:
       DOCS_FOLDER: /data/docs
       COGNITOR_URL: ${COGNITOR_URL}
@@ -21,5 +22,3 @@ services:
         source: ./logs
         target: /app/logs
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"

@@ -89,7 +89,7 @@ async def get_folder() -> WorkerFolder:
     """Get the currently configured folder path."""
     folder_path = _worker_state.get("folder_path")
     return WorkerFolder(
-        folder_path=folder_path,
+        folder_path=str(folder_path) if folder_path is not None else None,
         configured=folder_path is not None,
     )
 
